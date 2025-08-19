@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+
+import requests
+import time
+import json
+import os
+import threading
+from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+import re
+import random
+from flask import Flask, jsonify
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+BRANDS_FILE = "brands_luxury.json"
+SEEN_FILE = "seen_luxury_items.json"
+EXCHANGE_RATE_FILE = "exchange_rate.json"
+CONVERSATION_LOG_FILE = "luxury_conversation_log.json"
+
+USE_DISCORD_BOT = os.environ.get('USE_DISCORD_BOT', 'true').lower() == 'true'
+DISCORD_BOT_URL = os.environ.get('DISCORD_BOT_URL', 'http://localhost:8000')
+MAX_PRICE_USD = 60
+MIN_PRICE_USD = 15
+
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+]
+
+exchange_rate_cache = {"rate": 150.0, "last_updated": "2024-01-01"}
+
+class ConversationLog:
+    def __init__(self):
+        self.log = []
+        self.load_log()
+    
+    def load_log(self):
+        try:
+            if os.path.exists(CONVERSATION_LOG_FILE):
+                with open(CONVERSATION_LOG_FILE, 'r', encoding='utf-8') as f:
+                    self.log = json.load(f)
+                logger.info(f"Loaded {len(self.log)} conversation entries")
+        except Exception as e:
+            logger.error(f"Error loading conversation log: {e}")
+            self.log = []
+    
+    def save_log(self):
+        try:
+            with open(CONVERSATION_LOG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.log[-1000:], f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving conversation log: {e}")
+    
+    def add_entry(self, entry_type, data):
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "type": entry_type,
+            "data": data
+        }
+        self.log.append(entry)
+        
+        if len(self.log) % 10 == 0:
+            self.save_log()
+    
+    def get_recent_hallucinations(self, hours=24):
+        cutoff = datetime.now() - timedelta(hours=hours)
+        return [entry for entry in self.log 
+                if entry.get('type') == 'hallucination' 
+                and datetime.fromisoformat(entry['timestamp']) > cutoff]
+
+conversation_log = ConversationLog()
+
+def load_brand_data():
+    try:
+        with open(BRANDS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.error(f"❌ {BRANDS_FILE} not found! Please create it first.")
+        return {}
+
+def load_seen_ids():
+    try:
+        if os.path.exists(SEEN_FILE):
+            with open(SEEN_FILE, 'r') as f:
+                return set(json.load(f))
+    except Exception as e:
+        logger.error(f"Error loading seen IDs: {e}")
+    return set()
+
+def save_seen_ids(seen_ids):
+    try:
+        with open(SEEN_FILE, 'w') as f:
+            json.dump(list(seen_ids), f)
+    except Exception as e:
+        logger.error(f"Error saving seen IDs: {e}")
+
+def convert_jpy_to_usd(jpy_price):
+    return jpy_price / exchange_rate_cache["rate"]
+
+def extract_price_from_text(price_text):
+    if not price_text:
+        return None
+    
+    price_text = price_text.replace(',', '').replace('¥', '').replace('円', '')
+    match = re.search(r'(\d+)', price_text)
+    
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+def is_luxury_clothing_item(title, brand_data):
+    title_lower = title.lower()
+    
+    excluded_global = {
+        'bag', 'purse', 'wallet', 'handbag', 'clutch', 'tote', 'backpack',
+        'shoes', 'sneakers', 'boots', 'heels', 'sandals', 'loafers',
+        'watch', 'jewelry', 'necklace', 'ring', 'bracelet', 'earrings',
+        'perfume', 'fragrance', 'cologne', 'spray',
+        'phone', 'case', 'cover', 'tech', 'electronic',
+        'poster', 'magazine', 'book', 'dvd', 'cd',
+        'バッグ', '財布', '靴', 'スニーカー', 'ブーツ', '時計', '香水',
+        'アクセサリー', 'ネックレス', '指輪', 'ブレスレット'
+    }
+    
+    clothing_indicators = {
+        'shirt', 'tee', 't-shirt', 'polo', 'blouse', 'top',
+        'jacket', 'blazer', 'coat', 'hoodie', 'sweatshirt',
+        'pants', 'jeans', 'trousers', 'shorts', 'denim',
+        'sweater', 'cardigan', 'pullover', 'knit',
+        'dress', 'skirt', 'tank', 'vest',
+        'cap', 'hat', 'beanie', 'scarf', 'gloves',
+        'underwear', 'socks', 'tights',
+        'シャツ', 'Tシャツ', 'ポロ', 'トップス',
+        'ジャケット', 'ブレザー', 'コート', 'パーカー',
+        'パンツ', 'ジーンズ', 'ショーツ', 'デニム',
+        'ニット', 'セーター', 'カーディガン',
+        'ワンピース', 'スカート', 'タンク', 'ベスト',
+        'キャップ', '帽子', 'マフラー', '手袋', '靴下'
+    }
+    
+    if any(excluded in title_lower for excluded in excluded_global):
+        return False
+    
+    for brand, data in brand_data.items():
+        if any(variant.lower() in title_lower for variant in data.get('variants', [])):
+            if any(excluded in title_lower for excluded in data.get('excluded_keywords', [])):
+                return False
+    
+    return any(indicator in title_lower for indicator in clothing_indicators)
+
+def calculate_luxury_deal_quality(price_usd, brand, title, brand_data):
+    brand_multipliers = {
+        "Balenciaga": 1.1,
+        "Vetements": 1.2,
+        "Rick Owens": 1.8,
+        "Comme Des Garcons": 1.3,
+        "Junya Watanabe": 1.4
+    }
+    
+    title_lower = title.lower()
+    base_price = 35
+    
+    if any(word in title_lower for word in ["jacket", "blazer", "coat", "ジャケット", "コート"]):
+        base_price = 45
+    elif any(word in title_lower for word in ["hoodie", "sweatshirt", "パーカー"]):
+        base_price = 40
+    elif any(word in title_lower for word in ["pants", "jeans", "パンツ", "ジーンズ"]):
+        base_price = 38
+    elif any(word in title_lower for word in ["shirt", "tee", "シャツ", "Tシャツ"]):
+        base_price = 30
+    
+    brand_multiplier = brand_multipliers.get(brand, 1.0)
+    market_price = base_price * brand_multiplier
+    
+    if price_usd >= market_price * 1.3:
+        quality = 0.3
+    elif price_usd >= market_price:
+        quality = 0.6
+    else:
+        quality = min(1.0, 0.9 + (market_price - price_usd) / market_price)
+    
+    archive_boost = 0.1 if any(term in title_lower for term in ["archive", "rare", "vintage", "fw", "ss"]) else 0
+    
+    return max(0.0, min(1.0, quality + archive_boost))
+
+def is_luxury_quality_listing(price_usd, brand, title, brand_data):
+    if price_usd < MIN_PRICE_USD or price_usd > MAX_PRICE_USD:
+        return False, f"Price ${price_usd:.2f} outside range ${MIN_PRICE_USD}-{MAX_PRICE_USD}"
+    
+    if not is_luxury_clothing_item(title, brand_data):
+        return False, "Not luxury clothing item"
+    
+    deal_quality = calculate_luxury_deal_quality(price_usd, brand, title, brand_data)
+    
+    if deal_quality < 0.4:
+        return False, f"Low deal quality: {deal_quality:.2f}"
+    
+    return True, f"Quality score: {deal_quality:.2f}"
+
+def generate_luxury_keywords(brand_data):
+    keywords = []
+    
+    for brand, data in brand_data.items():
+        variants = data.get('variants', [brand])
+        subcategories = data.get('subcategories', [])
+        
+        for variant in variants[:2]:
+            keywords.append(variant)
+            
+            for category in subcategories[:8]:
+                keywords.append(f"{variant} {category}")
+            
+            for season in ["fw", "ss", "aw"]:
+                for year in ["24", "23", "22"]:
+                    keywords.append(f"{variant} {season}{year}")
+            
+            for term in ["archive", "rare", "vintage"]:
+                keywords.append(f"{variant} {term}")
+    
+    return list(set(keywords))
+
+def scrape_yahoo_luxury(keyword, max_pages=2):
+    headers = {'User-Agent': random.choice(USER_AGENTS)}
+    items = []
+    
+    for page in range(1, max_pages + 1):
+        try:
+            url = f'https://auctions.yahoo.co.jp/search/search?p={keyword}&tab_ex=commerce&ei=utf-8&b={((page-1)*50)+1}'
+            response = requests.get(url, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                logger.warning(f"Page {page} returned status {response.status_code}")
+                continue
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            listings = soup.find_all('div', class_='Product')
+            
+            logger.info(f"Page {page}: Found {len(listings)} listings for '{keyword}'")
+            
+            for item in listings:
+                try:
+                    title_elem = item.find('h3', class_='Product__title')
+                    if not title_elem:
+                        continue
+                    
+                    title = title_elem.get_text(strip=True)
+                    
+                    link_elem = title_elem.find('a', href=True)
+                    if not link_elem:
+                        continue
+                    
+                    auction_id = extract_auction_id_from_url(link_elem['href'])
+                    if not auction_id:
+                        continue
+                    
+                    price_elem = item.find('span', class_='Product__price')
+                    if not price_elem:
+                        continue
+                    
+                    price_jpy = extract_price_from_text(price_elem.get_text())
+                    if not price_jpy:
+                        continue
+                    
+                    price_usd = convert_jpy_to_usd(price_jpy)
+                    
+                    image_elem = item.find('img')
+                    image_url = image_elem.get('src') if image_elem else None
+                    
+                    items.append({
+                        'auction_id': auction_id,
+                        'title': title,
+                        'price_jpy': price_jpy,
+                        'price_usd': price_usd,
+                        'image_url': image_url,
+                        'keyword': keyword
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Error processing item: {e}")
+                    continue
+            
+            time.sleep(random.uniform(2, 4))
+            
+        except Exception as e:
+            logger.error(f"Error scraping page {page} for '{keyword}': {e}")
+            conversation_log.add_entry("error", {"keyword": keyword, "page": page, "error": str(e)})
+    
+    return items
+
+def extract_auction_id_from_url(url):
+    patterns = [
+        r'/auction/([a-zA-Z0-9_-]+)',
+        r'auction_id=([a-zA-Z0-9_-]+)',
+        r'/([a-zA-Z0-9_-]+)(?:\?|$)'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            auction_id = match.group(1)
+            if len(auction_id) > 5 and auction_id.isalnum():
+                return auction_id
+    
+    return None
+
+def identify_luxury_brand(title, brand_data):
+    title_lower = title.lower()
+    
+    for brand, data in brand_data.items():
+        variants = data.get('variants', [brand])
+        for variant in variants:
+            if variant.lower() in title_lower:
+                return brand
+    
+    return "Unknown"
+
+def send_to_luxury_discord_bot(listing_data):
+    if not USE_DISCORD_BOT:
+        logger.info("Discord bot integration disabled")
+        return False
+    
+    try:
+        webhook_url = f"{DISCORD_BOT_URL}/webhook/luxury_listing"
+        
+        logger.info(f"Sending luxury listing to Discord: {listing_data['title'][:50]}...")
+        
+        response = requests.post(
+            webhook_url,
+            json=listing_data,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            logger.info("✅ Successfully sent to luxury Discord bot")
+            return True
+        else:
+            logger.error(f"❌ Discord bot returned status {response.status_code}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error sending to Discord bot: {e}")
+        conversation_log.add_entry("discord_error", {"error": str(e), "listing": listing_data})
+        return False
+
+def create_luxury_listing_data(item, brand):
+    return {
+        'auction_id': item['auction_id'],
+        'title': item['title'],
+        'brand': brand,
+        'price_jpy': item['price_jpy'],
+        'price_usd': round(item['price_usd'], 2),
+        'zenmarket_url': f"https://zenmarket.jp/en/auction.aspx?itemCode={item['auction_id']}",
+        'yahoo_url': f"https://page.auctions.yahoo.co.jp/jp/auction/{item['auction_id']}",
+        'image_url': item.get('image_url'),
+        'seller_id': 'unknown',
+        'auction_end_time': None,
+        'keyword_used': item.get('keyword', ''),
+        'deal_quality': calculate_luxury_deal_quality(item['price_usd'], brand, item['title'], BRAND_DATA),
+        'is_luxury': True
+    }
+
+def run_luxury_health_server():
+    app = Flask(__name__)
+    
+    @app.route('/health')
+    def health():
+        return jsonify({
+            "status": "healthy",
+            "service": "luxury_sniper",
+            "timestamp": datetime.now().isoformat(),
+            "discord_enabled": USE_DISCORD_BOT,
+            "brands_tracked": len(BRAND_DATA),
+            "items_seen": len(seen_ids)
+        })
+    
+    @app.route('/stats')
+    def stats():
+        return jsonify({
+            "brands_tracked": list(BRAND_DATA.keys()),
+            "total_seen": len(seen_ids),
+            "recent_errors": len(conversation_log.get_recent_hallucinations(24)),
+            "max_price_usd": MAX_PRICE_USD,
+            "min_price_usd": MIN_PRICE_USD
+        })
+    
+    port = int(os.environ.get('PORT', 8001))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+def main_luxury_loop():
+    global seen_ids
+    
+    logger.info("🎯 Starting LUXURY FASHION Yahoo Sniper...")
+    logger.info(f"Target brands: {', '.join(BRAND_DATA.keys())}")
+    logger.info(f"Price range: ${MIN_PRICE_USD}-${MAX_PRICE_USD}")
+    logger.info(f"Discord bot: {'Enabled' if USE_DISCORD_BOT else 'Disabled'}")
+    
+    health_thread = threading.Thread(target=run_luxury_health_server, daemon=True)
+    health_thread.start()
+    
+    seen_ids = load_seen_ids()
+    keywords = generate_luxury_keywords(BRAND_DATA)
+    
+    logger.info(f"Generated {len(keywords)} luxury keywords")
+    
+    cycle_num = 0
+    total_found = 0
+    total_sent = 0
+    
+    while True:
+        cycle_num += 1
+        cycle_start = time.time()
+        
+        logger.info(f"\n🔄 LUXURY CYCLE #{cycle_num} - {datetime.now().strftime('%H:%M:%S')}")
+        
+        cycle_found = 0
+        cycle_sent = 0
+        
+        for i, keyword in enumerate(keywords):
+            try:
+                logger.info(f"[{i+1}/{len(keywords)}] Searching: '{keyword}'")
+                
+                items = scrape_yahoo_luxury(keyword, max_pages=2)
+                
+                for item in items:
+                    if item['auction_id'] in seen_ids:
+                        continue
+                    
+                    seen_ids.add(item['auction_id'])
+                    brand = identify_luxury_brand(item['title'], BRAND_DATA)
+                    
+                    is_quality, reason = is_luxury_quality_listing(
+                        item['price_usd'], brand, item['title'], BRAND_DATA
+                    )
+                    
+                    cycle_found += 1
+                    total_found += 1
+                    
+                    if is_quality:
+                        listing_data = create_luxury_listing_data(item, brand)
+                        
+                        logger.info(f"✅ LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
+                        
+                        if send_to_luxury_discord_bot(listing_data):
+                            cycle_sent += 1
+                            total_sent += 1
+                            
+                            conversation_log.add_entry("luxury_listing", {
+                                "brand": brand,
+                                "title": item['title'],
+                                "price_usd": item['price_usd'],
+                                "quality": listing_data['deal_quality']
+                            })
+                    else:
+                        logger.debug(f"❌ Filtered: {reason}")
+                
+                time.sleep(random.uniform(3, 6))
+                
+            except Exception as e:
+                logger.error(f"Error processing keyword '{keyword}': {e}")
+                conversation_log.add_entry("keyword_error", {"keyword": keyword, "error": str(e)})
+        
+        cycle_time = time.time() - cycle_start
+        
+        logger.info(f"🏁 Cycle #{cycle_num} complete:")
+        logger.info(f"   Found: {cycle_found} | Sent: {cycle_sent} | Time: {cycle_time:.1f}s")
+        logger.info(f"📊 Total: {total_found} found, {total_sent} sent to Discord")
+        
+        save_seen_ids(seen_ids)
+        conversation_log.save_log()
+        
+        sleep_time = max(300, 600 - cycle_time)
+        logger.info(f"😴 Sleeping {sleep_time:.0f}s until next cycle...")
+        time.sleep(sleep_time)
+
+if __name__ == "__main__":
+    BRAND_DATA = load_brand_data()
+    
+    if not BRAND_DATA:
+        logger.error("❌ No brand data loaded. Exiting.")
+        exit(1)
+    
+    seen_ids = set()
+    
+    try:
+        main_luxury_loop()
+    except KeyboardInterrupt:
+        logger.info("👋 Luxury sniper stopped by user")
+        save_seen_ids(seen_ids)
+        conversation_log.save_log()
+    except Exception as e:
+        logger.error(f"💥 Critical error: {e}")
+        conversation_log.add_entry("critical_error", {"error": str(e)})
+        conversation_log.save_log()
