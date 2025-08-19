@@ -374,9 +374,12 @@ def send_to_luxury_discord_bot(listing_data):
         return False
     
     try:
-        webhook_url = f"{DISCORD_BOT_URL}/webhook/luxury_listing"
+        # Clean up the Discord bot URL
+        discord_url = DISCORD_BOT_URL.rstrip('/')
+        webhook_url = f"{discord_url}/webhook/luxury_listing"
         
         logger.info(f"Sending luxury listing to Discord: {listing_data['title'][:50]}...")
+        logger.info(f"Using webhook URL: {webhook_url}")
         
         response = requests.post(
             webhook_url,
@@ -388,7 +391,7 @@ def send_to_luxury_discord_bot(listing_data):
             logger.info("✅ Successfully sent to luxury Discord bot")
             return True
         else:
-            logger.error(f"❌ Discord bot returned status {response.status_code}")
+            logger.error(f"❌ Discord bot returned status {response.status_code}: {response.text}")
             return False
             
     except Exception as e:
@@ -437,7 +440,7 @@ def run_luxury_health_server():
             "min_price_usd": MIN_PRICE_USD
         })
     
-    port = int(os.environ.get('PORT', 8001))
+    port = int(os.environ.get('PORT', 8002))
     app.run(host='0.0.0.0', port=port, debug=False)
 
 def main_luxury_loop():

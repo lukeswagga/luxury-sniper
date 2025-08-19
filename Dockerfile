@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
-ENV PORT=8001
-EXPOSE 8001
+ENV PORT=8002
+EXPOSE 8002
 
 CMD ["sh", "-c", "python luxury_discord_bot.py & python luxury_sniper.py"]
