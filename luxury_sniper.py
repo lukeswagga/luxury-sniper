@@ -18,12 +18,37 @@ logger = logging.getLogger(__name__)
 BRANDS_FILE = "brands_luxury.json"
 SEEN_FILE = "seen_luxury_items.json"
 EXCHANGE_RATE_FILE = "exchange_rate.json"
-CONVERSATION_LOG_FILE = "luxury_conversation_log.json"
+LUXURY_FINDS_FILE = "luxury_finds.json"
+
+def save_luxury_find_to_file(listing_data):
+    """Save luxury finds to a JSON file for review"""
+    try:
+        finds = []
+        if os.path.exists(LUXURY_FINDS_FILE):
+            with open(LUXURY_FINDS_FILE, 'r', encoding='utf-8') as f:
+                finds = json.load(f)
+        
+        # Add timestamp
+        listing_data['found_at'] = datetime.now().isoformat()
+        finds.append(listing_data)
+        
+        # Keep only last 100 finds
+        finds = finds[-100:]
+        
+        with open(LUXURY_FINDS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(finds, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"💾 Saved luxury find to {LUXURY_FINDS_FILE}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving luxury find: {e}")
+        return False
 
 USE_DISCORD_BOT = os.environ.get('USE_DISCORD_BOT', 'false').lower() == 'true'
 DISCORD_BOT_URL = os.environ.get('DISCORD_BOT_URL', 'http://localhost:8000')
 MAX_PRICE_USD = 60
-MIN_PRICE_USD = 15
+MIN_PRICE_USD = 0.50  # Very low minimum to catch everything
 
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -369,15 +394,25 @@ def identify_luxury_brand(title, brand_data):
     return "Unknown"
 
 def send_to_luxury_discord_bot(listing_data):
-    if not USE_DISCORD_BOT or not DISCORD_BOT_URL:
-        logger.info("Discord bot integration disabled or no URL configured")
+    if not USE_DISCORD_BOT:
+        logger.info("Discord bot integration disabled")
         return False
     
     try:
+        # Check if Discord bot is running on same server
         webhook_url = f"{DISCORD_BOT_URL.rstrip('/')}/webhook/luxury_listing"
         
+        # Test connection first
+        health_url = f"{DISCORD_BOT_URL.rstrip('/')}/health"
+        try:
+            health_response = requests.get(health_url, timeout=2)
+            if health_response.status_code != 200:
+                logger.warning("Discord bot health check failed, bot may not be ready")
+        except:
+            logger.warning("Cannot reach Discord bot, it may not be running yet")
+            return False
+        
         logger.info(f"Sending luxury listing to Discord: {listing_data['title'][:50]}...")
-        logger.info(f"Using webhook URL: {webhook_url}")
         
         response = requests.post(
             webhook_url,
@@ -394,7 +429,7 @@ def send_to_luxury_discord_bot(listing_data):
             
     except Exception as e:
         logger.error(f"❌ Error sending to Discord bot: {e}")
-        conversation_log.add_entry("discord_error", {"error": str(e), "listing": listing_data})
+        # Don't crash, just continue without Discord
         return False
 
 def create_luxury_listing_data(item, brand):
@@ -494,16 +529,19 @@ def main_luxury_loop():
                         
                         logger.info(f"✅ LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
                         
+                        # Save to file regardless of Discord status
+                        save_luxury_find_to_file(listing_data)
+                        
                         if send_to_luxury_discord_bot(listing_data):
                             cycle_sent += 1
                             total_sent += 1
-                            
-                            conversation_log.add_entry("luxury_listing", {
-                                "brand": brand,
-                                "title": item['title'],
-                                "price_usd": item['price_usd'],
-                                "quality": listing_data['deal_quality']
-                            })
+                        
+                        conversation_log.add_entry("luxury_listing", {
+                            "brand": brand,
+                            "title": item['title'],
+                            "price_usd": item['price_usd'],
+                            "quality": listing_data['deal_quality']
+                        })
                     else:
                         logger.debug(f"❌ Filtered: {reason}")
                 
@@ -535,34 +573,10 @@ if __name__ == "__main__":
     
     seen_ids = set()
     
-    # Check if we should run the Discord bot alongside the scraper
-    run_discord_bot = os.environ.get('RUN_DISCORD_BOT', 'true').lower() == 'true'
-    
-    if run_discord_bot:
-        # Import and start Discord bot in a separate thread
-        try:
-            from luxury_discord_bot import bot, BOT_TOKEN, run_luxury_flask_app
-            
-            # Start Flask webhook server in background
-            flask_thread = threading.Thread(target=run_luxury_flask_app, daemon=True)
-            flask_thread.start()
-            logger.info("🌐 Started luxury Discord webhook server")
-            
-            # Start Discord bot in background
-            bot_thread = threading.Thread(target=lambda: bot.run(BOT_TOKEN), daemon=True)
-            bot_thread.start()
-            logger.info("🤖 Started luxury Discord bot")
-            
-            # Set Discord bot URL to localhost since they're on same server
-            DISCORD_BOT_URL = "http://localhost:8000"
-            USE_DISCORD_BOT = True
-            
-            # Wait a moment for services to start
-            time.sleep(5)
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to start Discord bot: {e}")
-            logger.info("🔄 Continuing with scraper only...")
+    # For now, just run the scraper and save finds locally
+    # We'll add Discord integration later
+    logger.info("🎯 Running luxury scraper in standalone mode")
+    logger.info("💾 Finds will be saved to luxury_finds.json")
     
     try:
         main_luxury_loop()
