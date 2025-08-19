@@ -13,4 +13,4 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=8001
 EXPOSE 8001
 
-CMD ["python", "luxury_sniper.py"]
+CMD ["sh", "-c", "python luxury_discord_bot.py & python luxury_sniper.py"]

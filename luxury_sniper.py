@@ -32,7 +32,27 @@ USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
 ]
 
-exchange_rate_cache = {"rate": 150.0, "last_updated": "2024-01-01"}
+def load_exchange_rate():
+    global exchange_rate_cache
+    try:
+        if os.path.exists(EXCHANGE_RATE_FILE):
+            with open(EXCHANGE_RATE_FILE, 'r') as f:
+                exchange_rate_cache = json.load(f)
+        else:
+            # Set default rate
+            exchange_rate_cache = {"rate": 147.0, "last_updated": "2024-01-01"}
+    except Exception as e:
+        logger.error(f"Error loading exchange rate: {e}")
+        exchange_rate_cache = {"rate": 147.0, "last_updated": "2024-01-01"}
+
+def save_exchange_rate():
+    try:
+        with open(EXCHANGE_RATE_FILE, 'w') as f:
+            json.dump(exchange_rate_cache, f)
+    except Exception as e:
+        logger.error(f"Error saving exchange rate: {e}")
+
+load_exchange_rate()  # Load exchange rate on startup
 
 class ConversationLog:
     def __init__(self):
@@ -233,7 +253,10 @@ def scrape_yahoo_luxury(keyword, max_pages=2):
     
     for page in range(1, max_pages + 1):
         try:
-            url = f'https://auctions.yahoo.co.jp/search/search?p={keyword}&tab_ex=commerce&ei=utf-8&b={((page-1)*50)+1}'
+            encoded_kw = keyword.replace(' ', '+')
+            b_param = ((page-1) * 50) + 1
+            url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}'
+            
             response = requests.get(url, headers=headers, timeout=15)
             
             if response.status_code != 200:
@@ -241,27 +264,30 @@ def scrape_yahoo_luxury(keyword, max_pages=2):
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
-            listings = soup.find_all('div', class_='Product')
+            listings = soup.select('li.Product')  # Use li.Product instead of div.Product
             
             logger.info(f"Page {page}: Found {len(listings)} listings for '{keyword}'")
             
             for item in listings:
                 try:
-                    title_elem = item.find('h3', class_='Product__title')
+                    title_elem = item.select_one('h3.Product__title a') or item.select_one('a.Product__titleLink')
                     if not title_elem:
                         continue
                     
                     title = title_elem.get_text(strip=True)
                     
-                    link_elem = title_elem.find('a', href=True)
-                    if not link_elem:
+                    link = title_elem.get('href')
+                    if not link:
                         continue
+                        
+                    if not link.startswith("http"):
+                        link = "https://auctions.yahoo.co.jp" + link
                     
-                    auction_id = extract_auction_id_from_url(link_elem['href'])
+                    auction_id = extract_auction_id_from_url(link)
                     if not auction_id:
                         continue
                     
-                    price_elem = item.find('span', class_='Product__price')
+                    price_elem = item.select_one('span.Product__priceValue') or item.select_one('.Product__price')
                     if not price_elem:
                         continue
                     
@@ -271,8 +297,15 @@ def scrape_yahoo_luxury(keyword, max_pages=2):
                     
                     price_usd = convert_jpy_to_usd(price_jpy)
                     
-                    image_elem = item.find('img')
-                    image_url = image_elem.get('src') if image_elem else None
+                    image_elem = item.select_one('img')
+                    image_url = None
+                    if image_elem:
+                        image_url = image_elem.get('src') or image_elem.get('data-src')
+                        if image_url and not image_url.startswith('http'):
+                            if image_url.startswith('//'):
+                                image_url = 'https:' + image_url
+                            else:
+                                image_url = 'https://auctions.yahoo.co.jp' + image_url
                     
                     items.append({
                         'auction_id': auction_id,
@@ -296,6 +329,9 @@ def scrape_yahoo_luxury(keyword, max_pages=2):
     return items
 
 def extract_auction_id_from_url(url):
+    if not url:
+        return None
+        
     patterns = [
         r'/auction/([a-zA-Z0-9_-]+)',
         r'auction_id=([a-zA-Z0-9_-]+)',
@@ -306,8 +342,18 @@ def extract_auction_id_from_url(url):
         match = re.search(pattern, url)
         if match:
             auction_id = match.group(1)
-            if len(auction_id) > 5 and auction_id.isalnum():
+            # Clean up auction ID
+            auction_id = auction_id.split('?')[0].split('#')[0]
+            if len(auction_id) > 5:
                 return auction_id
+    
+    # Fallback: get last part of URL
+    try:
+        auction_id = url.split('/')[-1].split('?')[0].split('#')[0]
+        if len(auction_id) > 5 and auction_id.replace('_', '').replace('-', '').isalnum():
+            return auction_id
+    except:
+        pass
     
     return None
 
