@@ -9,8 +9,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+RUN mkdir -p /app/data
+
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8003
-EXPOSE 8003
 
-CMD ["sh", "-c", "python luxury_discord_bot.py & python luxury_sniper.py"]
+EXPOSE 8000 8003
+
+# Run both Discord bot and scraper
+CMD ["python", "luxury_sniper.py"]

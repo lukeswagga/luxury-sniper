@@ -21,7 +21,7 @@ EXCHANGE_RATE_FILE = "exchange_rate.json"
 CONVERSATION_LOG_FILE = "luxury_conversation_log.json"
 
 USE_DISCORD_BOT = os.environ.get('USE_DISCORD_BOT', 'false').lower() == 'true'
-DISCORD_BOT_URL = os.environ.get('DISCORD_BOT_URL', '')
+DISCORD_BOT_URL = os.environ.get('DISCORD_BOT_URL', 'http://localhost:8000')
 MAX_PRICE_USD = 60
 MIN_PRICE_USD = 15
 
@@ -534,6 +534,35 @@ if __name__ == "__main__":
         exit(1)
     
     seen_ids = set()
+    
+    # Check if we should run the Discord bot alongside the scraper
+    run_discord_bot = os.environ.get('RUN_DISCORD_BOT', 'true').lower() == 'true'
+    
+    if run_discord_bot:
+        # Import and start Discord bot in a separate thread
+        try:
+            from luxury_discord_bot import bot, BOT_TOKEN, run_luxury_flask_app
+            
+            # Start Flask webhook server in background
+            flask_thread = threading.Thread(target=run_luxury_flask_app, daemon=True)
+            flask_thread.start()
+            logger.info("🌐 Started luxury Discord webhook server")
+            
+            # Start Discord bot in background
+            bot_thread = threading.Thread(target=lambda: bot.run(BOT_TOKEN), daemon=True)
+            bot_thread.start()
+            logger.info("🤖 Started luxury Discord bot")
+            
+            # Set Discord bot URL to localhost since they're on same server
+            DISCORD_BOT_URL = "http://localhost:8000"
+            USE_DISCORD_BOT = True
+            
+            # Wait a moment for services to start
+            time.sleep(5)
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start Discord bot: {e}")
+            logger.info("🔄 Continuing with scraper only...")
     
     try:
         main_luxury_loop()
