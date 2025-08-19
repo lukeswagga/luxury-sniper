@@ -20,8 +20,8 @@ SEEN_FILE = "seen_luxury_items.json"
 EXCHANGE_RATE_FILE = "exchange_rate.json"
 CONVERSATION_LOG_FILE = "luxury_conversation_log.json"
 
-USE_DISCORD_BOT = os.environ.get('USE_DISCORD_BOT', 'true').lower() == 'true'
-DISCORD_BOT_URL = os.environ.get('DISCORD_BOT_URL', 'http://localhost:8000')
+USE_DISCORD_BOT = os.environ.get('USE_DISCORD_BOT', 'false').lower() == 'true'
+DISCORD_BOT_URL = os.environ.get('DISCORD_BOT_URL', '')
 MAX_PRICE_USD = 60
 MIN_PRICE_USD = 15
 
@@ -369,14 +369,12 @@ def identify_luxury_brand(title, brand_data):
     return "Unknown"
 
 def send_to_luxury_discord_bot(listing_data):
-    if not USE_DISCORD_BOT:
-        logger.info("Discord bot integration disabled")
+    if not USE_DISCORD_BOT or not DISCORD_BOT_URL:
+        logger.info("Discord bot integration disabled or no URL configured")
         return False
     
     try:
-        # Clean up the Discord bot URL
-        discord_url = DISCORD_BOT_URL.rstrip('/')
-        webhook_url = f"{discord_url}/webhook/luxury_listing"
+        webhook_url = f"{DISCORD_BOT_URL.rstrip('/')}/webhook/luxury_listing"
         
         logger.info(f"Sending luxury listing to Discord: {listing_data['title'][:50]}...")
         logger.info(f"Using webhook URL: {webhook_url}")
@@ -440,7 +438,7 @@ def run_luxury_health_server():
             "min_price_usd": MIN_PRICE_USD
         })
     
-    port = int(os.environ.get('PORT', 8002))
+    port = int(os.environ.get('PORT', 8003))
     app.run(host='0.0.0.0', port=port, debug=False)
 
 def main_luxury_loop():
@@ -451,8 +449,7 @@ def main_luxury_loop():
     logger.info(f"Price range: ${MIN_PRICE_USD}-${MAX_PRICE_USD}")
     logger.info(f"Discord bot: {'Enabled' if USE_DISCORD_BOT else 'Disabled'}")
     
-    health_thread = threading.Thread(target=run_luxury_health_server, daemon=True)
-    health_thread.start()
+    # Don't start health server to avoid port conflicts - let main system handle health
     
     seen_ids = load_seen_ids()
     keywords = generate_luxury_keywords(BRAND_DATA)
