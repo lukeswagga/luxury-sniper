@@ -30,13 +30,7 @@ def check_if_luxury_item_exists_in_db(auction_id):
                 finds = json.load(f)
                 for find in finds:
                     if find.get('auction_id') == auction_id:
-                        logger.debug(f"Duplicate found in luxury_finds.json: {auction_id}")
                         return True
-        
-        # Check seen_ids set (in-memory, very fast)
-        if auction_id in seen_ids:
-            logger.debug(f"Duplicate found in seen_ids: {auction_id}")
-            return True
         
         # Could also check shared database if DATABASE_URL is available
         # But for now, just rely on local storage and seen_ids
@@ -45,86 +39,6 @@ def check_if_luxury_item_exists_in_db(auction_id):
     except Exception as e:
         logger.warning(f"Error checking duplicate: {e}")
         return False
-
-def is_duplicate_luxury_item(auction_id, title, price_usd, brand):
-    """Enhanced duplicate detection using multiple criteria"""
-    try:
-        # Primary check: auction_id (most reliable)
-        if check_if_luxury_item_exists_in_db(auction_id):
-            return True, "auction_id"
-        
-        # Secondary check: title similarity (fuzzy matching)
-        if os.path.exists(LUXURY_FINDS_FILE):
-            with open(LUXURY_FINDS_FILE, 'r', encoding='utf-8') as f:
-                finds = json.load(f)
-                for find in finds:
-                    # Check for very similar titles (potential duplicates)
-                    existing_title = find.get('title', '').lower()
-                    current_title = title.lower()
-                    
-                    # Remove common variations and check similarity
-                    clean_existing = re.sub(r'[^\w\s]', '', existing_title)
-                    clean_current = re.sub(r'[^\w\s]', '', current_title)
-                    
-                    # Check if titles are very similar (90%+ match)
-                    if len(clean_existing) > 10 and len(clean_current) > 10:
-                        similarity = calculate_title_similarity(clean_existing, clean_current)
-                        if similarity > 0.9:
-                            logger.debug(f"Potential duplicate by title similarity ({similarity:.2f}): {title[:50]}...")
-                            return True, "title_similarity"
-        
-        # Tertiary check: price + brand combination (rare but possible)
-        if os.path.exists(LUXURY_FINDS_FILE):
-            with open(LUXURY_FINDS_FILE, 'r', encoding='utf-8') as f:
-                finds = json.load(f)
-                for find in finds:
-                    if (find.get('brand') == brand and 
-                        abs(find.get('price_usd', 0) - price_usd) < 0.50 and
-                        find.get('title', '').lower()[:20] == title.lower()[:20]):
-                        logger.debug(f"Potential duplicate by price+brand+title: {title[:50]}...")
-                        return True, "price_brand_title"
-        
-        return False, None
-        
-    except Exception as e:
-        logger.warning(f"Error in duplicate detection: {e}")
-        return False, None
-
-def calculate_title_similarity(title1, title2):
-    """Calculate similarity between two titles using simple character matching"""
-    if not title1 or not title2:
-        return 0.0
-    
-    # Convert to sets of words for better comparison
-    words1 = set(title1.split())
-    words2 = set(title2.split())
-    
-    if not words1 or not words2:
-        return 0.0
-    
-    # Calculate Jaccard similarity
-    intersection = len(words1.intersection(words2))
-    union = len(words1.union(words2))
-    
-    if union == 0:
-        return 0.0
-    
-    return intersection / union
-
-def add_to_seen_ids(auction_id, title, price_usd, brand):
-    """Add item to seen_ids and log for duplicate detection"""
-    seen_ids.add(auction_id)
-    
-    # Also log to conversation log for debugging
-    conversation_log.add_entry("item_seen", {
-        "auction_id": auction_id,
-        "title": title[:100],
-        "price_usd": price_usd,
-        "brand": brand,
-        "timestamp": datetime.now().isoformat()
-    })
-    
-    logger.debug(f"Added to seen_ids: {auction_id} - {title[:50]}...")
 
 def save_luxury_find_to_file(listing_data):
     """Save luxury finds to a JSON file for review"""
@@ -150,84 +64,6 @@ def save_luxury_find_to_file(listing_data):
     except Exception as e:
         logger.error(f"Error saving luxury find: {e}")
         return False
-
-def cleanup_old_duplicates():
-    """Clean up old duplicate data to prevent memory bloat"""
-    try:
-        # Clean up luxury_finds.json to keep only last 100 items
-        if os.path.exists(LUXURY_FINDS_FILE):
-            with open(LUXURY_FINDS_FILE, 'r', encoding='utf-8') as f:
-                finds = json.load(f)
-            
-            if len(finds) > 100:
-                # Keep only the most recent 100 finds
-                finds = finds[-100:]
-                
-                with open(LUXURY_FINDS_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(finds, f, ensure_ascii=False, indent=2)
-                
-                logger.info(f"🧹 Cleaned up luxury_finds.json, kept {len(finds)} most recent items")
-        
-        # Clean up conversation log to keep only last 1000 entries
-        if os.path.exists(CONVERSATION_LOG_FILE):
-            with open(CONVERSATION_LOG_FILE, 'r', encoding='utf-8') as f:
-                log_entries = json.load(f)
-            
-            if len(log_entries) > 1000:
-                # Keep only the most recent 1000 entries
-                log_entries = log_entries[-1000:]
-                
-                with open(CONVERSATION_LOG_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(log_entries, f, ensure_ascii=False, indent=2)
-                
-                logger.info(f"🧹 Cleaned up conversation log, kept {len(log_entries)} most recent entries")
-        
-        # Clean up seen_ids if it gets too large (keep only last 10000)
-        global seen_ids
-        if len(seen_ids) > 10000:
-            # Convert to list, keep last 10000, convert back to set
-            seen_list = list(seen_ids)
-            seen_ids = set(seen_list[-10000:])
-            logger.info(f"🧹 Cleaned up seen_ids, kept {len(seen_ids)} most recent IDs")
-            
-    except Exception as e:
-        logger.warning(f"Error during cleanup: {e}")
-
-def get_duplicate_statistics():
-    """Get statistics about duplicate detection"""
-    try:
-        stats = {
-            "total_seen": len(seen_ids),
-            "total_finds": 0,
-            "duplicates_by_auction_id": 0,
-            "duplicates_by_title_similarity": 0,
-            "duplicates_by_price_brand_title": 0
-        }
-        
-        if os.path.exists(LUXURY_FINDS_FILE):
-            with open(LUXURY_FINDS_FILE, 'r', encoding='utf-8') as f:
-                finds = json.load(f)
-                stats["total_finds"] = len(finds)
-        
-        if os.path.exists(CONVERSATION_LOG_FILE):
-            with open(CONVERSATION_LOG_FILE, 'r', encoding='utf-8') as f:
-                log_entries = json.load(f)
-                
-                for entry in log_entries:
-                    if entry.get('type') == 'duplicate_detected':
-                        reason = entry.get('data', {}).get('reason', 'unknown')
-                        if reason == 'auction_id':
-                            stats["duplicates_by_auction_id"] += 1
-                        elif reason == 'title_similarity':
-                            stats["duplicates_by_title_similarity"] += 1
-                        elif reason == 'price_brand_title':
-                            stats["duplicates_by_price_brand_title"] += 1
-        
-        return stats
-        
-    except Exception as e:
-        logger.warning(f"Error getting duplicate statistics: {e}")
-        return {}
 
 USE_DISCORD_BOT = os.environ.get('USE_DISCORD_BOT', 'false').lower() == 'true'
 DISCORD_BOT_URL = os.environ.get('DISCORD_BOT_URL', 'http://localhost:8000')
@@ -391,7 +227,8 @@ def calculate_luxury_deal_quality(price_usd, brand, title, brand_data):
         "Vetements": 1.2,
         "Rick Owens": 1.8,
         "Comme Des Garcons": 1.3,
-        "Junya Watanabe": 1.4
+        "Junya Watanabe": 1.4,
+        "Issey Miyake": 1.3
     }
     
     title_lower = title.lower()
@@ -583,8 +420,12 @@ def send_to_luxury_discord_bot(listing_data):
         return False
     
     try:
-        # Check if Discord bot is running on same server
+        # Use the luxury listing endpoint that exists in your Discord bot
         webhook_url = f"{DISCORD_BOT_URL.rstrip('/')}/webhook/luxury_listing"
+        
+        # Add luxury identifier to the data
+        listing_data['is_luxury'] = True
+        listing_data['source'] = 'luxury_sniper'
         
         # Test connection first
         health_url = f"{DISCORD_BOT_URL.rstrip('/')}/health"
@@ -605,7 +446,7 @@ def send_to_luxury_discord_bot(listing_data):
         )
         
         if response.status_code == 200:
-            logger.info("✅ Successfully sent to luxury Discord bot")
+            logger.info("✅ Successfully sent to Discord bot")
             return True
         else:
             logger.error(f"❌ Discord bot returned status {response.status_code}: {response.text}")
@@ -649,34 +490,12 @@ def run_luxury_health_server():
     
     @app.route('/stats')
     def stats():
-        duplicate_stats = get_duplicate_statistics()
         return jsonify({
             "brands_tracked": list(BRAND_DATA.keys()),
             "total_seen": len(seen_ids),
             "recent_errors": len(conversation_log.get_recent_hallucinations(24)),
             "max_price_usd": MAX_PRICE_USD,
-            "min_price_usd": MIN_PRICE_USD,
-            "duplicate_detection": duplicate_stats,
-            "total_finds": duplicate_stats.get("total_finds", 0)
-        })
-    
-    @app.route('/duplicates')
-    def duplicates():
-        """Detailed duplicate detection information"""
-        duplicate_stats = get_duplicate_statistics()
-        return jsonify({
-            "duplicate_detection_stats": duplicate_stats,
-            "duplicate_detection_methods": {
-                "auction_id": "Primary method - checks if auction ID already exists",
-                "title_similarity": "Secondary method - fuzzy title matching (90%+ similarity)",
-                "price_brand_title": "Tertiary method - combination of price, brand, and title start"
-            },
-            "cleanup_schedule": "Every 5 cycles",
-            "storage_limits": {
-                "luxury_finds": "100 most recent items",
-                "conversation_log": "1000 most recent entries",
-                "seen_ids": "10000 most recent IDs"
-            }
+            "min_price_usd": MIN_PRICE_USD
         })
     
     port = int(os.environ.get('PORT', 8003))
@@ -717,24 +536,16 @@ def main_luxury_loop():
                 items = scrape_yahoo_luxury(keyword, max_pages=2)
                 
                 for item in items:
-                    brand = identify_luxury_brand(item['title'], BRAND_DATA)
-                    
-                    is_duplicate, reason = is_duplicate_luxury_item(
-                        item['auction_id'], item['title'], item['price_usd'], brand
-                    )
-                    
-                    if is_duplicate:
-                        logger.debug(f"Skipping duplicate: {item['title'][:50]}... (Reason: {reason})")
-                        conversation_log.add_entry("duplicate_detected", {
-                            "auction_id": item['auction_id'],
-                            "title": item['title'][:100],
-                            "reason": reason,
-                            "brand": brand,
-                            "price_usd": item['price_usd']
-                        })
+                    if item['auction_id'] in seen_ids:
                         continue
                     
-                    add_to_seen_ids(item['auction_id'], item['title'], item['price_usd'], brand)
+                    # Check if item already exists in database (if we're using it)
+                    if check_if_luxury_item_exists_in_db(item['auction_id']):
+                        seen_ids.add(item['auction_id'])
+                        continue
+                    
+                    seen_ids.add(item['auction_id'])
+                    brand = identify_luxury_brand(item['title'], BRAND_DATA)
                     
                     is_quality, reason = is_luxury_quality_listing(
                         item['price_usd'], brand, item['title'], BRAND_DATA
@@ -772,20 +583,12 @@ def main_luxury_loop():
         
         cycle_time = time.time() - cycle_start
         
-        # Get duplicate statistics
-        duplicate_stats = get_duplicate_statistics()
-        
         logger.info(f"🏁 Cycle #{cycle_num} complete:")
         logger.info(f"   Found: {cycle_found} | Sent: {cycle_sent} | Time: {cycle_time:.1f}s")
         logger.info(f"📊 Total: {total_found} found, {total_sent} sent to Discord")
-        logger.info(f"🔄 Duplicates: {duplicate_stats.get('duplicates_by_auction_id', 0)} by ID, {duplicate_stats.get('duplicates_by_title_similarity', 0)} by title, {duplicate_stats.get('duplicates_by_price_brand_title', 0)} by price+brand")
         
         save_seen_ids(seen_ids)
         conversation_log.save_log()
-        
-        # Clean up old data every 5 cycles
-        if cycle_num % 5 == 0:
-            cleanup_old_duplicates()
         
         sleep_time = max(300, 600 - cycle_time)
         logger.info(f"😴 Sleeping {sleep_time:.0f}s until next cycle...")

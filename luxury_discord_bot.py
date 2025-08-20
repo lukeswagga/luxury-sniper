@@ -27,15 +27,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Duplicate detection tracking
-duplicate_detection_stats = {
-    "duplicates_by_auction_id": 0,
-    "duplicates_by_title_similarity": 0,
-    "duplicates_by_price_brand_title": 0,
-    "total_duplicates_detected": 0,
-    "total_listings_received": 0
-}
-
 class LuxuryInputValidator:
     @staticmethod
     def sanitize_username(username: str) -> str:
@@ -49,124 +40,6 @@ class LuxuryInputValidator:
         if not auction_id or len(auction_id) > 50:
             return False
         return bool(re.match(r'^[a-zA-Z0-9_-]+$', auction_id))
-
-def check_luxury_duplicate_in_database(auction_id):
-    """Check if luxury item already exists in database by auction ID"""
-    try:
-        existing = db_manager.execute_query(
-            'SELECT id, title, brand, price_usd FROM listings WHERE auction_id = %s' if db_manager.use_postgres else 
-            'SELECT id, title, brand, price_usd FROM listings WHERE auction_id = ?',
-            (auction_id,),
-            fetch_one=True
-        )
-        return existing
-    except Exception as e:
-        logger.warning(f"⚠️ Could not check duplicates in database: {e}")
-        return None
-
-def check_luxury_duplicate_by_title_similarity(title, brand, price_usd):
-    """Check for potential duplicates by title similarity"""
-    try:
-        # Get recent listings with similar characteristics
-        recent_listings = db_manager.execute_query(
-            'SELECT title, brand, price_usd FROM listings WHERE brand = %s AND price_usd BETWEEN %s AND %s ORDER BY created_at DESC LIMIT 50' if db_manager.use_postgres else 
-            'SELECT title, brand, price_usd FROM listings WHERE brand = ? AND price_usd BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 50',
-            (brand, price_usd * 0.8, price_usd * 1.2),
-            fetch_one=False
-        )
-        
-        if not recent_listings:
-            return False, None
-        
-        title_lower = title.lower()
-        for listing in recent_listings:
-            existing_title = listing[0].lower()
-            
-            # Simple similarity check - if titles are very similar
-            if calculate_title_similarity(title_lower, existing_title) > 0.85:
-                return True, existing_title
-        
-        return False, None
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Could not check title similarity: {e}")
-        return False, None
-
-def calculate_title_similarity(title1, title2):
-    """Calculate similarity between two titles using word overlap"""
-    if not title1 or not title2:
-        return 0.0
-    
-    # Convert to sets of words for better comparison
-    words1 = set(title1.split())
-    words2 = set(title2.split())
-    
-    if not words1 or not words2:
-        return 0.0
-    
-    # Calculate Jaccard similarity
-    intersection = len(words1.intersection(words2))
-    union = len(words1.union(words2))
-    
-    if union == 0:
-        return 0.0
-    
-    return intersection / union
-
-def is_luxury_duplicate(listing_data):
-    """Enhanced duplicate detection using multiple criteria"""
-    auction_id = listing_data.get('auction_id')
-    title = listing_data.get('title', '')
-    brand = listing_data.get('brand', '')
-    price_usd = listing_data.get('price_usd', 0)
-    
-    duplicate_detection_stats["total_listings_received"] += 1
-    
-    # Primary check: auction_id (most reliable)
-    existing_listing = check_luxury_duplicate_in_database(auction_id)
-    if existing_listing:
-        duplicate_detection_stats["duplicates_by_auction_id"] += 1
-        duplicate_detection_stats["total_duplicates_detected"] += 1
-        logger.info(f"🔄 Duplicate by auction_id: {auction_id} - {title[:50]}...")
-        return True, "auction_id", existing_listing
-    
-    # Secondary check: title similarity for same brand
-    if brand and title and price_usd:
-        is_similar, existing_title = check_luxury_duplicate_by_title_similarity(title, brand, price_usd)
-        if is_similar:
-            duplicate_detection_stats["duplicates_by_title_similarity"] += 1
-            duplicate_detection_stats["total_duplicates_detected"] += 1
-            logger.info(f"🔄 Duplicate by title similarity: {title[:50]}... vs {existing_title[:50]}...")
-            return True, "title_similarity", {"title": existing_title}
-    
-    # Tertiary check: price + brand + title start combination
-    if brand and title and price_usd:
-        try:
-            similar_listings = db_manager.execute_query(
-                'SELECT title FROM listings WHERE brand = %s AND ABS(price_usd - %s) < 1.0 AND title LIKE %s LIMIT 5' if db_manager.use_postgres else 
-                'SELECT title FROM listings WHERE brand = ? AND ABS(price_usd - ?) < 1.0 AND title LIKE ? LIMIT 5',
-                (brand, price_usd, f"{title[:20]}%"),
-                fetch_one=False
-            )
-            
-            if similar_listings:
-                duplicate_detection_stats["duplicates_by_price_brand_title"] += 1
-                duplicate_detection_stats["total_duplicates_detected"] += 1
-                logger.info(f"🔄 Duplicate by price+brand+title: {title[:50]}...")
-                return True, "price_brand_title", {"similar_titles": [l[0] for l in similar_listings]}
-                
-        except Exception as e:
-            logger.warning(f"⚠️ Could not check price+brand+title similarity: {e}")
-    
-    return False, None, None
-
-def get_duplicate_detection_stats():
-    """Get current duplicate detection statistics"""
-    return {
-        **duplicate_detection_stats,
-        "duplicate_rate": (duplicate_detection_stats["total_duplicates_detected"] / 
-                          max(duplicate_detection_stats["total_listings_received"], 1)) * 100
-    }
 
 def load_luxury_config():
     bot_token = os.environ.get('DISCORD_BOT_TOKEN')
@@ -228,7 +101,8 @@ LUXURY_BRAND_EMOJIS = {
     "Vetements": "🔥", 
     "Rick Owens": "🖤",
     "Comme Des Garcons": "❤️",
-    "Junya Watanabe": "💙"
+    "Junya Watanabe": "💙",
+    "Issey Miyake": "🌀"
 }
 
 intents = discord.Intents.default()
@@ -261,12 +135,6 @@ async def on_ready():
         logger.info(f"✅ Luxury channel ready: #{luxury_channel.name}")
         
         init_subscription_tables()
-        
-        # Log duplicate detection system status
-        logger.info("🔄 Enhanced duplicate detection system enabled")
-        logger.info("   - Auction ID checking")
-        logger.info("   - Title similarity detection (85%+ threshold)")
-        logger.info("   - Price+Brand+Title combination checking")
         
         await bot.change_presence(
             activity=discord.Activity(
@@ -384,7 +252,7 @@ async def send_luxury_listing_embed(channel, listing_data):
                 listing_data['zenmarket_url'],
                 listing_data['yahoo_url'],
                 listing_data.get('image_url'),
-                listing_data['deal_quality'],
+                listing_data.get('deal_quality', 0.5),
                 message.id,
                 listing_data.get('auction_end_time')
             )
@@ -404,7 +272,8 @@ def get_luxury_brand_color(brand):
         "Vetements": 0xFF0000,
         "Rick Owens": 0x2C2C2C,
         "Comme Des Garcons": 0xFF69B4,
-        "Junya Watanabe": 0x4169E1
+        "Junya Watanabe": 0x4169E1,
+        "Issey Miyake": 0x800080
     }
     return colors.get(brand, 0x9932CC)
 
@@ -467,24 +336,23 @@ async def send_single_luxury_listing(listing_data):
         logger.error(f"❌ Invalid auction ID: {auction_id}")
         return
     
-    # Enhanced duplicate detection
-    is_duplicate, reason, existing_data = is_luxury_duplicate(listing_data)
-    
-    if is_duplicate:
-        logger.info(f"🔄 Duplicate luxury listing detected and skipped: {auction_id} - {listing_data.get('title', 'Unknown')[:50]}... (Reason: {reason})")
+    # Check for duplicates in database
+    try:
+        existing = db_manager.execute_query(
+            'SELECT id FROM listings WHERE auction_id = %s' if db_manager.use_postgres else 
+            'SELECT id FROM listings WHERE auction_id = ?',
+            (auction_id,),
+            fetch_one=True
+        )
         
-        # Log duplicate details for monitoring
-        if existing_data:
-            if reason == "auction_id":
-                logger.debug(f"   Existing: {existing_data[1]} - {existing_data[2]} - ${existing_data[3]:.2f}")
-            elif reason == "title_similarity":
-                logger.debug(f"   Similar to: {existing_data['title']}")
-            elif reason == "price_brand_title":
-                logger.debug(f"   Similar titles: {', '.join(existing_data['similar_titles'][:3])}")
-        
-        return
+        if existing:
+            logger.info(f"🔄 Duplicate luxury listing detected, skipping: {auction_id}")
+            return
+            
+    except Exception as e:
+        logger.warning(f"⚠️ Could not check duplicates in database: {e}")
+        # Continue anyway - don't let database issues stop us
     
-    # Not a duplicate, add to batch
     luxury_batch_buffer.append(listing_data)
     last_luxury_batch_time = time.time()
     
@@ -582,9 +450,9 @@ async def luxury_setup(ctx):
 async def luxury_stats(ctx):
     try:
         total_listings = db_manager.execute_query(
-            'SELECT COUNT(*) FROM listings WHERE brand IN (%s, %s, %s, %s, %s)' if db_manager.use_postgres else 
-            'SELECT COUNT(*) FROM listings WHERE brand IN (?, ?, ?, ?, ?)',
-            ('Balenciaga', 'Vetements', 'Rick Owens', 'Comme Des Garcons', 'Junya Watanabe'),
+            'SELECT COUNT(*) FROM listings WHERE brand IN (%s, %s, %s, %s, %s, %s)' if db_manager.use_postgres else 
+            'SELECT COUNT(*) FROM listings WHERE brand IN (?, ?, ?, ?, ?, ?)',
+            ('Balenciaga', 'Vetements', 'Rick Owens', 'Comme Des Garcons', 'Junya Watanabe', 'Issey Miyake'),
             fetch_one=True
         )
         
@@ -592,9 +460,6 @@ async def luxury_stats(ctx):
             'SELECT COUNT(*) FROM user_bookmarks', 
             fetch_one=True
         )
-        
-        # Get duplicate detection stats
-        duplicate_stats = get_duplicate_detection_stats()
         
         embed = discord.Embed(
             title="💎 Luxury Channel Statistics",
@@ -616,7 +481,7 @@ async def luxury_stats(ctx):
         
         embed.add_field(
             name="🎯 Target Brands",
-            value="Balenciaga, Vetements, Rick Owens\nComme Des Garcons, Junya Watanabe",
+            value="Balenciaga, Vetements, Rick Owens\nComme Des Garcons, Junya Watanabe, Issey Miyake",
             inline=False
         )
         
@@ -632,113 +497,22 @@ async def luxury_stats(ctx):
             inline=True
         )
         
-        # Add duplicate detection stats
-        if duplicate_stats["total_listings_received"] > 0:
-            embed.add_field(
-                name="🔄 Duplicate Detection",
-                value=f"Rate: {duplicate_stats['duplicate_rate']:.1f}%\nTotal: {duplicate_stats['total_duplicates_detected']}",
-                inline=True
-            )
-        
         await ctx.send(embed=embed)
         
     except Exception as e:
         await ctx.send(f"❌ Error getting stats: {e}")
-
-@bot.command(name='duplicates')
-async def luxury_duplicates(ctx):
-    """Show detailed duplicate detection statistics"""
-    try:
-        duplicate_stats = get_duplicate_detection_stats()
-        
-        embed = discord.Embed(
-            title="🔄 Luxury Duplicate Detection Statistics",
-            color=0xFF6B6B,
-            timestamp=datetime.now(timezone.utc)
-        )
-        
-        embed.add_field(
-            name="📊 Overall Stats",
-            value=f"**Total Received:** {duplicate_stats['total_listings_received']}\n**Total Duplicates:** {duplicate_stats['total_duplicates_detected']}\n**Duplicate Rate:** {duplicate_stats['duplicate_rate']:.1f}%",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🔍 Detection Methods",
-            value=f"**By Auction ID:** {duplicate_stats['duplicates_by_auction_id']}\n**By Title Similarity:** {duplicate_stats['duplicates_by_title_similarity']}\n**By Price+Brand+Title:** {duplicate_stats['duplicates_by_price_brand_title']}",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="💡 How It Works",
-            value="1. **Auction ID Check** - Most reliable\n2. **Title Similarity** - 85%+ word overlap\n3. **Price+Brand+Title** - Combination check",
-            inline=False
-        )
-        
-        embed.set_footer(text="🔄 Duplicate detection prevents spam and ensures quality")
-        
-        await ctx.send(embed=embed)
-        
-    except Exception as e:
-        await ctx.send(f"❌ Error getting duplicate stats: {e}")
-
-@bot.command(name='reset_duplicates')
-async def reset_duplicate_stats(ctx):
-    """Reset duplicate detection statistics (Admin only)"""
-    try:
-        # Check if user has admin permissions
-        if not ctx.author.guild_permissions.administrator:
-            await ctx.send("❌ You need administrator permissions to reset duplicate statistics.")
-            return
-        
-        global duplicate_detection_stats
-        duplicate_detection_stats = {
-            "duplicates_by_auction_id": 0,
-            "duplicates_by_title_similarity": 0,
-            "duplicates_by_price_brand_title": 0,
-            "total_duplicates_detected": 0,
-            "total_listings_received": 0
-        }
-        
-        embed = discord.Embed(
-            title="🔄 Duplicate Detection Statistics Reset",
-            description="All duplicate detection statistics have been reset to zero.",
-            color=0x00FF00,
-            timestamp=datetime.now(timezone.utc)
-        )
-        
-        embed.add_field(
-            name="📊 New Stats",
-            value="All counters reset to 0",
-            inline=False
-        )
-        
-        embed.set_footer(text="Statistics will start counting from this point forward")
-        
-        await ctx.send(embed=embed)
-        logger.info(f"🔄 Duplicate detection statistics reset by {ctx.author.name}")
-        
-    except Exception as e:
-        await ctx.send(f"❌ Error resetting duplicate stats: {e}")
 
 def run_luxury_flask_app():
     app = Flask(__name__)
     
     @app.route('/health')
     def health():
-        duplicate_stats = get_duplicate_detection_stats()
         return jsonify({
             "status": "healthy",
             "service": "luxury_discord_bot",
             "timestamp": datetime.now().isoformat(),
             "bot_ready": bot.is_ready(),
-            "batch_size": len(luxury_batch_buffer),
-            "duplicate_detection": {
-                "enabled": True,
-                "total_received": duplicate_stats["total_listings_received"],
-                "total_duplicates": duplicate_stats["total_duplicates_detected"],
-                "duplicate_rate": duplicate_stats["duplicate_rate"]
-            }
+            "batch_size": len(luxury_batch_buffer)
         })
     
     @app.route('/webhook/luxury_listing', methods=['POST'])
@@ -771,27 +545,6 @@ def run_luxury_flask_app():
             "status": "healthy",
             "webhook": "luxury_listing",
             "bot_ready": bot.is_ready()
-        })
-    
-    @app.route('/duplicates')
-    def duplicates():
-        """Detailed duplicate detection information via API"""
-        duplicate_stats = get_duplicate_detection_stats()
-        return jsonify({
-            "duplicate_detection": {
-                "enabled": True,
-                "stats": duplicate_stats,
-                "methods": {
-                    "auction_id": "Primary method - checks if auction ID already exists",
-                    "title_similarity": "Secondary method - fuzzy title matching (85%+ similarity)",
-                    "price_brand_title": "Tertiary method - combination of price, brand, and title start"
-                },
-                "thresholds": {
-                    "title_similarity": 0.85,
-                    "price_tolerance": 1.0,
-                    "title_start_length": 20
-                }
-            }
         })
     
     port = int(os.environ.get('PORT', 8002))

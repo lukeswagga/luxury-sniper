@@ -85,7 +85,7 @@
       "バッグ", "財布", "靴", "時計", "香水"
     ],
     "price_range": {
-      "min_usd": 20,
+      "min_usd": 0.5,
       "max_usd": 60
     }
   },
@@ -224,6 +224,65 @@
     ],
     "price_range": {
       "min_usd": 18,
+      "max_usd": 60
+    }
+  },
+  "Issey Miyake": {
+    "variants": [
+      "Issey Miyake",
+      "イッセイミヤケ",
+      "ISSEY MIYAKE",
+      "Miyake",
+      "Issey"
+    ],
+    "subcategories": [
+      "shirt",
+      "tee",
+      "t-shirt",
+      "polo",
+      "blouse",
+      "top",
+      "hoodie",
+      "sweatshirt",
+      "sweater",
+      "cardigan",
+      "jacket",
+      "blazer",
+      "coat",
+      "vest",
+      "pants",
+      "jeans",
+      "trousers",
+      "shorts",
+      "dress",
+      "skirt",
+      "pleats",
+      "cap",
+      "hat",
+      "scarf",
+      "socks",
+      "シャツ",
+      "Tシャツ",
+      "ポロ",
+      "ブラウス",
+      "トップス",
+      "パーカー",
+      "ニット",
+      "ジャケット",
+      "ベスト",
+      "パンツ",
+      "プリーツ",
+      "ワンピース",
+      "キャップ"
+    ],
+    "excluded_keywords": [
+      "bag", "purse", "wallet", "handbag", "clutch", "tote",
+      "shoes", "sneakers", "boots", "sandals",
+      "watch", "jewelry", "perfume", "fragrance", "cologne",
+      "バッグ", "財布", "靴", "時計", "香水"
+    ],
+    "price_range": {
+      "min_usd": 20,
       "max_usd": 60
     }
   }
