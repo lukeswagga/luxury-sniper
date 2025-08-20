@@ -191,7 +191,6 @@ def is_luxury_clothing_item(title, brand_data):
         'perfume', 'fragrance', 'cologne', 'spray',
         'phone', 'case', 'cover', 'tech', 'electronic',
         'poster', 'magazine', 'book', 'dvd', 'cd',
-        't-pleats', 'alexander wang', 'archive',
         'バッグ', '財布', '靴', 'スニーカー', 'ブーツ', '時計', '香水',
         'アクセサリー', 'ネックレス', '指輪', 'ブレスレット'
     }
@@ -254,7 +253,7 @@ def calculate_luxury_deal_quality(price_usd, brand, title, brand_data):
     else:
         quality = min(1.0, 0.9 + (market_price - price_usd) / market_price)
     
-    archive_boost = 0.1 if any(term in title_lower for term in ["rare", "vintage", "fw", "ss"]) else 0
+    archive_boost = 0.1 if any(term in title_lower for term in ["archive", "rare", "vintage", "fw", "ss"]) else 0
     
     return max(0.0, min(1.0, quality + archive_boost))
 
@@ -289,7 +288,7 @@ def generate_luxury_keywords(brand_data):
                 for year in ["24", "23", "22"]:
                     keywords.append(f"{variant} {season}{year}")
             
-            for term in ["rare", "vintage"]:
+            for term in ["archive", "rare", "vintage"]:
                 keywords.append(f"{variant} {term}")
     
     return list(set(keywords))
@@ -303,8 +302,8 @@ def scrape_yahoo_luxury_bin(keyword, max_pages=2):
         try:
             encoded_kw = keyword.replace(' ', '+')
             b_param = ((page-1) * 50) + 1
-            # Add Buy It Now filter: auccat=0 (Buy It Now only)
-            url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}&auccat=0'
+            # Add Buy It Now filter: buynow=1 (Buy It Now only)
+            url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}&buynow=1'
             
             response = requests.get(url, headers=headers, timeout=15)
             
@@ -325,6 +324,11 @@ def scrape_yahoo_luxury_bin(keyword, max_pages=2):
                     
                     title = title_elem.get_text(strip=True)
                     
+                    # Skip if title contains auction indicators
+                    title_lower = title.lower()
+                    if any(indicator in title_lower for indicator in ['入札', 'bid', 'auction', 'オークション']):
+                        continue
+                    
                     link = title_elem.get('href')
                     if not link:
                         continue
@@ -336,11 +340,18 @@ def scrape_yahoo_luxury_bin(keyword, max_pages=2):
                     if not auction_id:
                         continue
                     
+                    # Check for Buy It Now price indicators
                     price_elem = item.select_one('span.Product__priceValue') or item.select_one('.Product__price')
                     if not price_elem:
                         continue
                     
-                    price_jpy = extract_price_from_text(price_elem.get_text())
+                    price_text = price_elem.get_text(strip=True)
+                    
+                    # Skip if price contains auction indicators
+                    if any(indicator in price_text for indicator in ['入札', '円 -', 'bid', '現在価格']):
+                        continue
+                    
+                    price_jpy = extract_price_from_text(price_text)
                     if not price_jpy:
                         continue
                     
@@ -386,8 +397,8 @@ def scrape_yahoo_luxury_auctions(keyword, max_pages=2):
         try:
             encoded_kw = keyword.replace(' ', '+')
             b_param = ((page-1) * 50) + 1
-            # Add Auction filter: auccat=auction (Auctions only)
-            url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}&auccat=auction'
+            # Regular search without BIN filter = mostly auctions
+            url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}'
             
             response = requests.get(url, headers=headers, timeout=15)
             
@@ -419,11 +430,25 @@ def scrape_yahoo_luxury_auctions(keyword, max_pages=2):
                     if not auction_id:
                         continue
                     
+                    # Check for auction price indicators
                     price_elem = item.select_one('span.Product__priceValue') or item.select_one('.Product__price')
                     if not price_elem:
                         continue
                     
-                    price_jpy = extract_price_from_text(price_elem.get_text())
+                    price_text = price_elem.get_text(strip=True)
+                    
+                    # Only include if it looks like an auction (has bidding indicators)
+                    title_lower = title.lower()
+                    is_auction = (
+                        any(indicator in price_text for indicator in ['入札', '円 -', 'bid', '現在価格']) or
+                        any(indicator in title_lower for indicator in ['入札', 'bid', 'auction', 'オークション']) or
+                        '即決' not in price_text  # No "Buy It Now" indicator
+                    )
+                    
+                    if not is_auction:
+                        continue  # Skip Buy It Now items in auction search
+                    
+                    price_jpy = extract_price_from_text(price_text)
                     if not price_jpy:
                         continue
                     
