@@ -272,26 +272,45 @@ def is_luxury_quality_listing(price_usd, brand, title, brand_data):
     return True, f"Quality score: {deal_quality:.2f}"
 
 def generate_luxury_keywords(brand_data):
+    """Generate simple, effective keywords focused on finding deals"""
     keywords = []
     
     for brand, data in brand_data.items():
         variants = data.get('variants', [brand])
         subcategories = data.get('subcategories', [])
         
-        for variant in variants[:2]:
+        # Add main brand variants (most important)
+        for variant in variants[:3]:  # Only top 3 variants
             keywords.append(variant)
-            
-            for category in subcategories[:8]:
-                keywords.append(f"{variant} {category}")
-            
-            for season in ["fw", "ss", "aw"]:
-                for year in ["24", "23", "22"]:
-                    keywords.append(f"{variant} {season}{year}")
-            
-            for term in ["archive", "rare", "vintage"]:
-                keywords.append(f"{variant} {term}")
+        
+        # Add brand + basic clothing items (no seasons)
+        basic_items = ["shirt", "tee", "jacket", "pants", "hoodie", "sweater"]
+        for variant in variants[:2]:  # Only top 2 variants
+            for item in basic_items:
+                keywords.append(f"{variant} {item}")
+        
+        # Add Japanese terms for better coverage
+        japanese_items = ["シャツ", "Tシャツ", "ジャケット", "パンツ", "パーカー", "ニット"]
+        for variant in variants[:1]:  # Only main variant
+            for item in japanese_items[:3]:  # Only top 3 Japanese terms
+                keywords.append(f"{variant} {item}")
     
+    # Remove duplicates and return
     return list(set(keywords))
+
+BANNED_KEYWORDS = {
+    'de travail', 'julius', 'kmrii', 'ifsixwasnine', 'groundy', 'fred perry', 
+    'play', 'tornado', 'midas', 'civarize', 'l.g.b.', 'yeezy', 'yzy', 
+    'gap', 'zara', 'uniqlo', 'ユニクロ', 'ザラ', 'ギャップ', 'フレッドペリー'
+}
+
+def has_banned_keywords(title):
+    """Check if title contains any banned keywords"""
+    title_lower = title.lower()
+    for banned in BANNED_KEYWORDS:
+        if banned in title_lower:
+            return True, banned
+    return False, None
 
 def check_if_buy_it_now(auction_id):
     """Check ZenMarket page to see if item has 'Buyout price' (Buy It Now)"""
@@ -339,10 +358,12 @@ def check_if_buy_it_now(auction_id):
         logger.warning(f"Error checking ZenMarket for {auction_id}: {e}")
         return 'unknown'
 
-def scrape_yahoo_luxury_all(keyword, max_pages=2):
-    """Scrape all listings and categorize them by checking ZenMarket"""
+def scrape_yahoo_luxury_all(keyword, max_pages=3):
+    """Scrape all listings and categorize them by checking ZenMarket - IMPROVED"""
     headers = {'User-Agent': random.choice(USER_AGENTS)}
     items = []
+    
+    logger.info(f"🔍 Scraping {max_pages} pages for: '{keyword}'")
     
     for page in range(1, max_pages + 1):
         try:
@@ -350,16 +371,25 @@ def scrape_yahoo_luxury_all(keyword, max_pages=2):
             b_param = ((page-1) * 50) + 1
             url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}'
             
+            logger.info(f"   📄 Scraping page {page}: {url}")
+            
             response = requests.get(url, headers=headers, timeout=15)
             
             if response.status_code != 200:
-                logger.warning(f"Page {page} returned status {response.status_code}")
+                logger.warning(f"❌ Page {page} returned status {response.status_code}")
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
             listings = soup.select('li.Product')
             
-            logger.info(f"Page {page}: Found {len(listings)} listings for '{keyword}'")
+            logger.info(f"   ✅ Page {page}: Found {len(listings)} raw listings")
+            
+            if len(listings) == 0:
+                logger.warning(f"   ⚠️ Page {page} has no listings, stopping pagination")
+                break
+            
+            page_processed = 0
+            page_quality = 0
             
             for item in listings:
                 try:
@@ -368,6 +398,13 @@ def scrape_yahoo_luxury_all(keyword, max_pages=2):
                         continue
                     
                     title = title_elem.get_text(strip=True)
+                    page_processed += 1
+                    
+                    # Check for banned keywords first (fast filter)
+                    has_banned, banned_word = has_banned_keywords(title)
+                    if has_banned:
+                        logger.debug(f"   🚫 Banned keyword '{banned_word}': {title[:50]}")
+                        continue
                     
                     link = title_elem.get('href')
                     if not link:
@@ -390,6 +427,10 @@ def scrape_yahoo_luxury_all(keyword, max_pages=2):
                     
                     price_usd = convert_jpy_to_usd(price_jpy)
                     
+                    # Quick price filter
+                    if price_usd < MIN_PRICE_USD or price_usd > MAX_PRICE_USD:
+                        continue
+                    
                     image_elem = item.select_one('img')
                     image_url = None
                     if image_elem:
@@ -400,7 +441,7 @@ def scrape_yahoo_luxury_all(keyword, max_pages=2):
                             else:
                                 image_url = 'https://auctions.yahoo.co.jp' + image_url
                     
-                    # Check ZenMarket to determine listing type
+                    # Check ZenMarket for listing type (only for quality items)
                     listing_type = check_if_buy_it_now(auction_id)
                     
                     items.append({
@@ -413,18 +454,28 @@ def scrape_yahoo_luxury_all(keyword, max_pages=2):
                         'listing_type': listing_type
                     })
                     
+                    page_quality += 1
+                    
                     # Add small delay after checking ZenMarket
-                    time.sleep(0.5)
+                    time.sleep(0.3)
                     
                 except Exception as e:
-                    logger.error(f"Error processing item: {e}")
+                    logger.error(f"   ❌ Error processing item: {e}")
                     continue
             
-            time.sleep(random.uniform(2, 4))
+            logger.info(f"   📊 Page {page}: {page_processed} processed, {page_quality} quality items")
+            
+            # If very few items on this page, stop pagination
+            if len(listings) < 20 and page > 1:
+                logger.info(f"   🔚 Page {page} has few items ({len(listings)}), stopping pagination")
+                break
+            
+            time.sleep(random.uniform(3, 5))
             
         except Exception as e:
-            logger.error(f"Error scraping page {page} for '{keyword}': {e}")
+            logger.error(f"❌ Error scraping page {page} for '{keyword}': {e}")
     
+    logger.info(f"🏁 Completed scraping '{keyword}': {len(items)} total quality items found")
     return items
 
 def extract_auction_id_from_url(url):
@@ -584,9 +635,9 @@ def main_luxury_loop():
         
         for i, keyword in enumerate(keywords):
             try:
-                logger.info(f"[{i+1}/{len(keywords)}] Searching: '{keyword}'")
+                logger.info(f"\n[{i+1}/{len(keywords)}] 🔍 SEARCHING: '{keyword}'")
                 
-                items = scrape_yahoo_luxury_all(keyword, max_pages=2)
+                items = scrape_yahoo_luxury_all(keyword, max_pages=3)
                 
                 for item in items:
                     if item['auction_id'] in seen_ids:
@@ -614,14 +665,14 @@ def main_luxury_loop():
                         listing_type = item['listing_type']
                         if listing_type in ['buy_it_now', 'both']:
                             listing_data['listing_type'] = 'buy_it_now'
-                            logger.info(f"✅ BIN LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
+                            logger.info(f"🛒 BIN LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
                         elif listing_type == 'auction':
                             listing_data['listing_type'] = 'auction'
-                            logger.info(f"✅ AUCTION LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
+                            logger.info(f"🔨 AUCTION LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
                         else:
                             # Unknown type, default to auction
                             listing_data['listing_type'] = 'auction'
-                            logger.info(f"✅ LUXURY FIND (unknown type): {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
+                            logger.info(f"💎 LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
                         
                         # Save to file regardless of Discord status
                         save_luxury_find_to_file(listing_data)
@@ -640,7 +691,7 @@ def main_luxury_loop():
                     else:
                         logger.debug(f"❌ Filtered: {reason}")
                 
-                time.sleep(random.uniform(3, 6))
+                time.sleep(random.uniform(5, 8))
                 
             except Exception as e:
                 logger.error(f"Error processing keyword '{keyword}': {e}")
