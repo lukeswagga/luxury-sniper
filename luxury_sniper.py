@@ -191,6 +191,7 @@ def is_luxury_clothing_item(title, brand_data):
         'perfume', 'fragrance', 'cologne', 'spray',
         'phone', 'case', 'cover', 'tech', 'electronic',
         'poster', 'magazine', 'book', 'dvd', 'cd',
+        't-pleats', 'alexander wang', 'archive',
         'バッグ', '財布', '靴', 'スニーカー', 'ブーツ', '時計', '香水',
         'アクセサリー', 'ネックレス', '指輪', 'ブレスレット'
     }
@@ -253,7 +254,7 @@ def calculate_luxury_deal_quality(price_usd, brand, title, brand_data):
     else:
         quality = min(1.0, 0.9 + (market_price - price_usd) / market_price)
     
-    archive_boost = 0.1 if any(term in title_lower for term in ["archive", "rare", "vintage", "fw", "ss"]) else 0
+    archive_boost = 0.1 if any(term in title_lower for term in ["rare", "vintage", "fw", "ss"]) else 0
     
     return max(0.0, min(1.0, quality + archive_boost))
 
@@ -288,7 +289,7 @@ def generate_luxury_keywords(brand_data):
                 for year in ["24", "23", "22"]:
                     keywords.append(f"{variant} {season}{year}")
             
-            for term in ["archive", "rare", "vintage"]:
+            for term in ["rare", "vintage"]:
                 keywords.append(f"{variant} {term}")
     
     return list(set(keywords))
