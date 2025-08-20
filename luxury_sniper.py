@@ -293,103 +293,54 @@ def generate_luxury_keywords(brand_data):
     
     return list(set(keywords))
 
-def scrape_yahoo_luxury_bin(keyword, max_pages=2):
-    """Scrape Buy It Now listings specifically"""
-    headers = {'User-Agent': random.choice(USER_AGENTS)}
-    items = []
-    
-    for page in range(1, max_pages + 1):
-        try:
-            encoded_kw = keyword.replace(' ', '+')
-            b_param = ((page-1) * 50) + 1
-            # Add Buy It Now filter: buynow=1 (Buy It Now only)
-            url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}&buynow=1'
+def check_if_buy_it_now(auction_id):
+    """Check ZenMarket page to see if item has 'Buyout price' (Buy It Now)"""
+    try:
+        zenmarket_url = f"https://zenmarket.jp/en/auction.aspx?itemCode={auction_id}"
+        headers = {'User-Agent': random.choice(USER_AGENTS)}
+        
+        response = requests.get(zenmarket_url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            content = response.text.lower()
             
-            response = requests.get(url, headers=headers, timeout=15)
+            # Check for Buy It Now indicators
+            bin_indicators = [
+                'buyout price',
+                'buy now price',
+                'fixed price',
+                'immediate purchase'
+            ]
             
-            if response.status_code != 200:
-                logger.warning(f"BIN Page {page} returned status {response.status_code}")
-                continue
+            # Check for Auction indicators  
+            auction_indicators = [
+                'current bid',
+                'highest bid',
+                'bidding',
+                'auction ends',
+                'time left'
+            ]
             
-            soup = BeautifulSoup(response.content, 'html.parser')
-            listings = soup.select('li.Product')
+            has_bin = any(indicator in content for indicator in bin_indicators)
+            has_auction = any(indicator in content for indicator in auction_indicators)
             
-            logger.info(f"BIN Page {page}: Found {len(listings)} Buy It Now listings for '{keyword}'")
-            
-            for item in listings:
-                try:
-                    title_elem = item.select_one('h3.Product__title a') or item.select_one('a.Product__titleLink')
-                    if not title_elem:
-                        continue
-                    
-                    title = title_elem.get_text(strip=True)
-                    
-                    # Skip if title contains auction indicators
-                    title_lower = title.lower()
-                    if any(indicator in title_lower for indicator in ['入札', 'bid', 'auction', 'オークション']):
-                        continue
-                    
-                    link = title_elem.get('href')
-                    if not link:
-                        continue
-                        
-                    if not link.startswith("http"):
-                        link = "https://auctions.yahoo.co.jp" + link
-                    
-                    auction_id = extract_auction_id_from_url(link)
-                    if not auction_id:
-                        continue
-                    
-                    # Check for Buy It Now price indicators
-                    price_elem = item.select_one('span.Product__priceValue') or item.select_one('.Product__price')
-                    if not price_elem:
-                        continue
-                    
-                    price_text = price_elem.get_text(strip=True)
-                    
-                    # Skip if price contains auction indicators
-                    if any(indicator in price_text for indicator in ['入札', '円 -', 'bid', '現在価格']):
-                        continue
-                    
-                    price_jpy = extract_price_from_text(price_text)
-                    if not price_jpy:
-                        continue
-                    
-                    price_usd = convert_jpy_to_usd(price_jpy)
-                    
-                    image_elem = item.select_one('img')
-                    image_url = None
-                    if image_elem:
-                        image_url = image_elem.get('src') or image_elem.get('data-src')
-                        if image_url and not image_url.startswith('http'):
-                            if image_url.startswith('//'):
-                                image_url = 'https:' + image_url
-                            else:
-                                image_url = 'https://auctions.yahoo.co.jp' + image_url
-                    
-                    items.append({
-                        'auction_id': auction_id,
-                        'title': title,
-                        'price_jpy': price_jpy,
-                        'price_usd': price_usd,
-                        'image_url': image_url,
-                        'keyword': keyword,
-                        'listing_type': 'buy_it_now'
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error processing BIN item: {e}")
-                    continue
-            
-            time.sleep(random.uniform(2, 4))
-            
-        except Exception as e:
-            logger.error(f"Error scraping BIN page {page} for '{keyword}': {e}")
-    
-    return items
+            if has_bin and not has_auction:
+                return 'buy_it_now'
+            elif has_auction and not has_bin:
+                return 'auction'
+            elif has_bin and has_auction:
+                return 'both'  # Has both BIN and auction
+            else:
+                return 'unknown'
+        
+        return 'unknown'
+        
+    except Exception as e:
+        logger.warning(f"Error checking ZenMarket for {auction_id}: {e}")
+        return 'unknown'
 
-def scrape_yahoo_luxury_auctions(keyword, max_pages=2):
-    """Scrape Auction listings specifically"""
+def scrape_yahoo_luxury_all(keyword, max_pages=2):
+    """Scrape all listings and categorize them by checking ZenMarket"""
     headers = {'User-Agent': random.choice(USER_AGENTS)}
     items = []
     
@@ -397,19 +348,18 @@ def scrape_yahoo_luxury_auctions(keyword, max_pages=2):
         try:
             encoded_kw = keyword.replace(' ', '+')
             b_param = ((page-1) * 50) + 1
-            # Regular search without BIN filter = mostly auctions
             url = f'https://auctions.yahoo.co.jp/search/search?p={encoded_kw}&n=50&b={b_param}&s1=new&o1=d&minPrice=1&maxPrice={int(MAX_PRICE_USD * exchange_rate_cache["rate"])}'
             
             response = requests.get(url, headers=headers, timeout=15)
             
             if response.status_code != 200:
-                logger.warning(f"Auction Page {page} returned status {response.status_code}")
+                logger.warning(f"Page {page} returned status {response.status_code}")
                 continue
             
             soup = BeautifulSoup(response.content, 'html.parser')
             listings = soup.select('li.Product')
             
-            logger.info(f"Auction Page {page}: Found {len(listings)} auction listings for '{keyword}'")
+            logger.info(f"Page {page}: Found {len(listings)} listings for '{keyword}'")
             
             for item in listings:
                 try:
@@ -430,25 +380,11 @@ def scrape_yahoo_luxury_auctions(keyword, max_pages=2):
                     if not auction_id:
                         continue
                     
-                    # Check for auction price indicators
                     price_elem = item.select_one('span.Product__priceValue') or item.select_one('.Product__price')
                     if not price_elem:
                         continue
                     
-                    price_text = price_elem.get_text(strip=True)
-                    
-                    # Only include if it looks like an auction (has bidding indicators)
-                    title_lower = title.lower()
-                    is_auction = (
-                        any(indicator in price_text for indicator in ['入札', '円 -', 'bid', '現在価格']) or
-                        any(indicator in title_lower for indicator in ['入札', 'bid', 'auction', 'オークション']) or
-                        '即決' not in price_text  # No "Buy It Now" indicator
-                    )
-                    
-                    if not is_auction:
-                        continue  # Skip Buy It Now items in auction search
-                    
-                    price_jpy = extract_price_from_text(price_text)
+                    price_jpy = extract_price_from_text(price_elem.get_text())
                     if not price_jpy:
                         continue
                     
@@ -464,6 +400,9 @@ def scrape_yahoo_luxury_auctions(keyword, max_pages=2):
                             else:
                                 image_url = 'https://auctions.yahoo.co.jp' + image_url
                     
+                    # Check ZenMarket to determine listing type
+                    listing_type = check_if_buy_it_now(auction_id)
+                    
                     items.append({
                         'auction_id': auction_id,
                         'title': title,
@@ -471,17 +410,20 @@ def scrape_yahoo_luxury_auctions(keyword, max_pages=2):
                         'price_usd': price_usd,
                         'image_url': image_url,
                         'keyword': keyword,
-                        'listing_type': 'auction'
+                        'listing_type': listing_type
                     })
                     
+                    # Add small delay after checking ZenMarket
+                    time.sleep(0.5)
+                    
                 except Exception as e:
-                    logger.error(f"Error processing auction item: {e}")
+                    logger.error(f"Error processing item: {e}")
                     continue
             
             time.sleep(random.uniform(2, 4))
             
         except Exception as e:
-            logger.error(f"Error scraping auction page {page} for '{keyword}': {e}")
+            logger.error(f"Error scraping page {page} for '{keyword}': {e}")
     
     return items
 
@@ -582,7 +524,6 @@ def create_luxury_listing_data(item, brand):
         'auction_end_time': None,
         'keyword_used': item.get('keyword', ''),
         'deal_quality': calculate_luxury_deal_quality(item['price_usd'], brand, item['title'], BRAND_DATA),
-        'listing_type': item.get('listing_type', 'auction'),
         'is_luxury': True
     }
 
@@ -643,12 +584,11 @@ def main_luxury_loop():
         
         for i, keyword in enumerate(keywords):
             try:
-                # PHASE 1: Buy It Now listings (higher priority)
-                logger.info(f"[{i+1}/{len(keywords)}] 🛒 BIN Search: '{keyword}'")
+                logger.info(f"[{i+1}/{len(keywords)}] Searching: '{keyword}'")
                 
-                bin_items = scrape_yahoo_luxury_bin(keyword, max_pages=2)
+                items = scrape_yahoo_luxury_all(keyword, max_pages=2)
                 
-                for item in bin_items:
+                for item in items:
                     if item['auction_id'] in seen_ids:
                         continue
                     
@@ -669,56 +609,19 @@ def main_luxury_loop():
                     
                     if is_quality:
                         listing_data = create_luxury_listing_data(item, brand)
-                        listing_data['listing_type'] = 'buy_it_now'
                         
-                        logger.info(f"✅ BIN LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
-                        
-                        # Save to file regardless of Discord status
-                        save_luxury_find_to_file(listing_data)
-                        
-                        if send_to_luxury_discord_bot(listing_data):
-                            cycle_sent += 1
-                            total_sent += 1
-                        
-                        conversation_log.add_entry("luxury_listing", {
-                            "brand": brand,
-                            "title": item['title'],
-                            "price_usd": item['price_usd'],
-                            "quality": listing_data['deal_quality'],
-                            "type": "buy_it_now"
-                        })
-                    else:
-                        logger.debug(f"❌ BIN Filtered: {reason}")
-                
-                # PHASE 2: Auction listings
-                logger.info(f"[{i+1}/{len(keywords)}] 🔨 Auction Search: '{keyword}'")
-                
-                auction_items = scrape_yahoo_luxury_auctions(keyword, max_pages=2)
-                
-                for item in auction_items:
-                    if item['auction_id'] in seen_ids:
-                        continue
-                    
-                    # Check if item already exists in database (if we're using it)
-                    if check_if_luxury_item_exists_in_db(item['auction_id']):
-                        seen_ids.add(item['auction_id'])
-                        continue
-                    
-                    seen_ids.add(item['auction_id'])
-                    brand = identify_luxury_brand(item['title'], BRAND_DATA)
-                    
-                    is_quality, reason = is_luxury_quality_listing(
-                        item['price_usd'], brand, item['title'], BRAND_DATA
-                    )
-                    
-                    cycle_found += 1
-                    total_found += 1
-                    
-                    if is_quality:
-                        listing_data = create_luxury_listing_data(item, brand)
-                        listing_data['listing_type'] = 'auction'
-                        
-                        logger.info(f"✅ AUCTION LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
+                        # Set the correct listing type based on ZenMarket check
+                        listing_type = item['listing_type']
+                        if listing_type in ['buy_it_now', 'both']:
+                            listing_data['listing_type'] = 'buy_it_now'
+                            logger.info(f"✅ BIN LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
+                        elif listing_type == 'auction':
+                            listing_data['listing_type'] = 'auction'
+                            logger.info(f"✅ AUCTION LUXURY FIND: {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
+                        else:
+                            # Unknown type, default to auction
+                            listing_data['listing_type'] = 'auction'
+                            logger.info(f"✅ LUXURY FIND (unknown type): {brand} - {item['title'][:60]} - ${item['price_usd']:.2f}")
                         
                         # Save to file regardless of Discord status
                         save_luxury_find_to_file(listing_data)
@@ -732,10 +635,10 @@ def main_luxury_loop():
                             "title": item['title'],
                             "price_usd": item['price_usd'],
                             "quality": listing_data['deal_quality'],
-                            "type": "auction"
+                            "type": listing_data['listing_type']
                         })
                     else:
-                        logger.debug(f"❌ Auction Filtered: {reason}")
+                        logger.debug(f"❌ Filtered: {reason}")
                 
                 time.sleep(random.uniform(3, 6))
                 
