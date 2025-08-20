@@ -236,18 +236,34 @@ def get_brand_color(brand):
     return colors.get(brand, 0x9932CC)
 
 async def send_profit_listing_embed(channel, listing_data):
-    """Send enhanced profit-focused listing embed"""
+    """Send enhanced profit-focused listing embed with error handling"""
     try:
+        # Debug: Print the data structure
+        logger.info(f"📊 Listing data keys: {list(listing_data.keys())}")
+        
         brand = listing_data.get('brand', 'Unknown')
         brand_emoji = LUXURY_BRAND_EMOJIS.get(brand, "💎")
         listing_type = listing_data.get('listing_type', 'unknown')
         
-        # Get profit analysis
+        # Get profit analysis with fallbacks
         profit_analysis = listing_data.get('profit_analysis', {})
         roi_percent = profit_analysis.get('roi_percent', 0)
         estimated_profit = profit_analysis.get('estimated_profit', 0)
         purchase_price = profit_analysis.get('purchase_price', listing_data.get('price_usd', 0))
         estimated_sell_price = profit_analysis.get('estimated_sell_price', 0)
+        
+        # Ensure we have valid numeric values
+        try:
+            roi_percent = float(roi_percent) if roi_percent else 0
+            estimated_profit = float(estimated_profit) if estimated_profit else 0
+            purchase_price = float(purchase_price) if purchase_price else 0
+            estimated_sell_price = float(estimated_sell_price) if estimated_sell_price else 0
+        except (ValueError, TypeError):
+            logger.warning(f"⚠️ Invalid numeric values in profit analysis, using defaults")
+            roi_percent = 0
+            estimated_profit = 0
+            purchase_price = listing_data.get('price_usd', 0)
+            estimated_sell_price = 0
         
         # Determine profit tier
         profit_tier = get_profit_tier(roi_percent)
@@ -261,9 +277,13 @@ async def send_profit_listing_embed(channel, listing_data):
         else:
             title_prefix = f"💎 {profit_emoji} PROFIT FIND"
         
+        # Get title with fallback
+        title = listing_data.get('title', 'No title available')
+        title_display = title[:150] + ('...' if len(title) > 150 else '')
+        
         embed = discord.Embed(
             title=f"{title_prefix} - {brand_emoji} {brand}",
-            description=f"**{listing_data['title'][:150]}{'...' if len(listing_data['title']) > 150 else ''}**",
+            description=f"**{title_display}**",
             color=get_brand_color(brand),
             timestamp=datetime.now(timezone.utc)
         )
@@ -272,16 +292,29 @@ async def send_profit_listing_embed(channel, listing_data):
             embed.set_thumbnail(url=listing_data['image_url'])
         
         # Profit calculation field (most important)
+        try:
+            profit_value = f"**Buy:** ${purchase_price:.2f}\n**Sell:** ${estimated_sell_price:.2f}\n**Profit:** ${estimated_profit:.2f}\n**ROI:** {roi_percent:.0f}%"
+        except (ValueError, TypeError):
+            profit_value = f"**Buy:** ${purchase_price:.2f}\n**Sell:** ${estimated_sell_price}\n**Profit:** ${estimated_profit:.2f}\n**ROI:** {roi_percent:.0f}%"
+        
         embed.add_field(
             name="💰 PROFIT CALCULATION",
-            value=f"**Buy:** ${purchase_price:.2f}\n**Sell:** ${estimated_sell_price}\n**Profit:** ${estimated_profit:.2f}\n**ROI:** {roi_percent:.0f}%",
+            value=profit_value,
             inline=True
         )
         
-        # Price details
+        # Price details with validation
+        try:
+            price_jpy = float(listing_data.get('price_jpy', 0)) if listing_data.get('price_jpy') else 0
+            price_usd = float(listing_data.get('price_usd', 0)) if listing_data.get('price_usd') else 0
+        except (ValueError, TypeError):
+            logger.warning(f"⚠️ Invalid price values, using defaults")
+            price_jpy = 0
+            price_usd = 0
+        
         embed.add_field(
             name="💴 Yahoo Price",
-            value=f"¥{listing_data['price_jpy']:,}\n(${listing_data['price_usd']:.2f})",
+            value=f"¥{price_jpy:,.0f}\n(${price_usd:.2f})",
             inline=True
         )
         
@@ -301,10 +334,15 @@ async def send_profit_listing_embed(channel, listing_data):
             inline=True
         )
         
+        # Build URLs with fallbacks
+        auction_id = listing_data.get('auction_id', 'unknown')
+        zenmarket_url = listing_data.get('zenmarket_url') or f"https://zenmarket.jp/en/auction.aspx?itemCode={auction_id}"
+        yahoo_url = listing_data.get('yahoo_url') or f"https://page.auctions.yahoo.co.jp/jp/auction/{auction_id}"
+        
         # Quick purchase links
         embed.add_field(
             name="🔗 QUICK PURCHASE",
-            value=f"[ZenMarket BUY NOW]({listing_data['zenmarket_url']})\n[Yahoo Direct]({listing_data['yahoo_url']})",
+            value=f"[ZenMarket BUY NOW]({zenmarket_url})\n[Yahoo Direct]({yahoo_url})",
             inline=False
         )
         
@@ -343,7 +381,8 @@ async def send_profit_listing_embed(channel, listing_data):
         return message
         
     except Exception as e:
-        logger.error(f"❌ Error sending profit listing: {e}")
+        logger.error(f"❌ Error sending profit listing embed: {e}")
+        logger.error(f"❌ Listing data: {listing_data}")
         return None
 
 async def route_listing_to_correct_channel(listing_data):
@@ -416,42 +455,55 @@ async def send_profit_batch_if_ready():
         logger.error(f"❌ Error sending profit batch: {e}")
 
 async def process_single_profit_listing(listing_data):
-    """Process a single profit listing"""
+    """Process a single profit listing with enhanced error handling"""
     global profit_batch_buffer, last_profit_batch_time
     
-    if not listing_data or 'auction_id' not in listing_data:
-        logger.error("❌ Invalid profit listing data")
-        return
-    
-    auction_id = listing_data['auction_id']
-    
-    # Check for duplicates
     try:
-        existing = db_manager.execute_query(
-            'SELECT id FROM listings WHERE auction_id = %s' if db_manager.use_postgres else 
-            'SELECT id FROM listings WHERE auction_id = ?',
-            (auction_id,),
-            fetch_one=True
-        )
-        
-        if existing:
-            logger.info(f"🔄 Duplicate profit listing detected, skipping: {auction_id}")
+        if not listing_data or 'auction_id' not in listing_data:
+            logger.error("❌ Invalid profit listing data - missing auction_id")
+            logger.error(f"❌ Data received: {listing_data}")
             return
+        
+        auction_id = listing_data['auction_id']
+        
+        # Ensure required fields exist with defaults
+        if 'zenmarket_url' not in listing_data:
+            listing_data['zenmarket_url'] = f"https://zenmarket.jp/en/auction.aspx?itemCode={auction_id}"
             
+        if 'yahoo_url' not in listing_data:
+            listing_data['yahoo_url'] = f"https://page.auctions.yahoo.co.jp/jp/auction/{auction_id}"
+        
+        # Check for duplicates
+        try:
+            existing = db_manager.execute_query(
+                'SELECT id FROM listings WHERE auction_id = %s' if db_manager.use_postgres else 
+                'SELECT id FROM listings WHERE auction_id = ?',
+                (auction_id,),
+                fetch_one=True
+            )
+            
+            if existing:
+                logger.info(f"🔄 Duplicate profit listing detected, skipping: {auction_id}")
+                return
+                
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check duplicates: {e}")
+        
+        # Add to batch
+        profit_batch_buffer.append(listing_data)
+        last_profit_batch_time = time.time()
+        
+        profit_analysis = listing_data.get('profit_analysis', {})
+        roi = profit_analysis.get('roi_percent', 0)
+        brand = listing_data.get('brand', 'Unknown')
+        
+        logger.info(f"📥 Added to profit batch: {brand} - {roi:.0f}% ROI")
+        
+        await send_profit_batch_if_ready()
+        
     except Exception as e:
-        logger.warning(f"⚠️ Could not check duplicates: {e}")
-    
-    # Add to batch
-    profit_batch_buffer.append(listing_data)
-    last_profit_batch_time = time.time()
-    
-    profit_analysis = listing_data.get('profit_analysis', {})
-    roi = profit_analysis.get('roi_percent', 0)
-    brand = listing_data.get('brand', 'Unknown')
-    
-    logger.info(f"📥 Added to profit batch: {brand} - {roi:.0f}% ROI")
-    
-    await send_profit_batch_if_ready()
+        logger.error(f"❌ Error processing profit listing: {e}")
+        logger.error(f"❌ Listing data: {listing_data}")
 
 @bot.event
 async def on_reaction_add(reaction, user):
