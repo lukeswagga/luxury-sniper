@@ -74,6 +74,7 @@ except Exception as e:
 
 LUXURY_CATEGORY_NAME = "💎 LUXURY STEALS"
 LUXURY_CHANNEL_NAME = "💎-luxury-under-60"
+BIN_CHANNEL_NAME = "💎-buyitnow"
 
 LUXURY_PROXIES = {
     "zenmarket": {
@@ -131,8 +132,10 @@ async def on_ready():
         
         luxury_category = await ensure_luxury_category_exists(guild)
         luxury_channel = await ensure_luxury_channel_exists(guild, luxury_category)
+        bin_channel = await ensure_bin_channel_exists(guild, luxury_category)
         
         logger.info(f"✅ Luxury channel ready: #{luxury_channel.name}")
+        logger.info(f"✅ Buy It Now channel ready: #{bin_channel.name}")
         
         init_subscription_tables()
         
@@ -176,7 +179,7 @@ async def ensure_luxury_channel_exists(guild, category):
             channel = await guild.create_text_channel(
                 LUXURY_CHANNEL_NAME,
                 category=category,
-                topic="High-end fashion finds under $60 - React with 👍 to bookmark!",
+                topic="🔨 Auction luxury finds under $60 - Place your bids!",
                 overwrites={
                     guild.default_role: discord.PermissionOverwrite(
                         read_messages=True,
@@ -192,12 +195,43 @@ async def ensure_luxury_channel_exists(guild, category):
     
     return channel
 
+async def ensure_bin_channel_exists(guild, category):
+    channel = discord.utils.get(guild.channels, name=BIN_CHANNEL_NAME)
+    
+    if not channel:
+        try:
+            channel = await guild.create_text_channel(
+                BIN_CHANNEL_NAME,
+                category=category,
+                topic="🛒 Buy It Now luxury deals - Instant purchase, no bidding required!",
+                overwrites={
+                    guild.default_role: discord.PermissionOverwrite(
+                        read_messages=True,
+                        send_messages=False,
+                        add_reactions=True
+                    )
+                }
+            )
+            logger.info(f"✅ Created BIN channel: #{BIN_CHANNEL_NAME}")
+        except Exception as e:
+            logger.error(f"❌ Error creating BIN channel: {e}")
+            raise
+    
+    return channel
+
 async def send_luxury_listing_embed(channel, listing_data):
     brand = listing_data.get('brand', 'Unknown')
     brand_emoji = LUXURY_BRAND_EMOJIS.get(brand, "💎")
+    listing_type = listing_data.get('listing_type', 'auction')
+    
+    # Different titles for different listing types
+    if listing_type == 'buy_it_now':
+        title_prefix = f"🛒 {brand_emoji} {brand}"
+    else:
+        title_prefix = f"🔨 {brand_emoji} {brand}"
     
     embed = discord.Embed(
-        title=f"{brand_emoji} {brand} - ${listing_data['price_usd']:.2f}",
+        title=f"{title_prefix} - ${listing_data['price_usd']:.2f}",
         description=listing_data['title'][:200] + ("..." if len(listing_data['title']) > 200 else ""),
         color=get_luxury_brand_color(brand),
         timestamp=datetime.now(timezone.utc)
@@ -221,6 +255,12 @@ async def send_luxury_listing_embed(channel, listing_data):
         inline=True
     )
     
+    # Different footer text based on listing type
+    if listing_type == 'buy_it_now':
+        listing_type_text = "🛒 Buy It Now - Instant purchase!"
+    else:
+        listing_type_text = "🔨 Auction - Place your bid!"
+    
     embed.add_field(
         name="🔗 Quick Buy",
         value=f"[ZenMarket]({listing_data['zenmarket_url']}) | [Yahoo Direct]({listing_data['yahoo_url']})",
@@ -228,7 +268,7 @@ async def send_luxury_listing_embed(channel, listing_data):
     )
     
     embed.set_footer(
-        text="React with 👍 to bookmark • 💎 Luxury steals under $60",
+        text=f"{listing_type_text} • 💎 Luxury steals under $60",
         icon_url="https://images.emojiterra.com/google/noto-emoji/unicode-15/color/512px/1f48e.png"
     )
     
@@ -316,7 +356,22 @@ async def send_luxury_batch_if_ready():
         logger.info(f"📦 Sending luxury batch of {len(batch_to_send)} items")
         
         for listing_data in batch_to_send:
-            await send_luxury_listing_embed(channel, listing_data)
+            # Route to correct channel based on listing type
+            listing_type = listing_data.get('listing_type', 'auction')
+            
+            if listing_type == 'buy_it_now':
+                target_channel = discord.utils.get(guild.channels, name=BIN_CHANNEL_NAME)
+            else:
+                target_channel = discord.utils.get(guild.channels, name=LUXURY_CHANNEL_NAME)
+            
+            if target_channel:
+                await send_luxury_listing_embed(target_channel, listing_data)
+            else:
+                # Fallback to main luxury channel
+                fallback_channel = discord.utils.get(guild.channels, name=LUXURY_CHANNEL_NAME)
+                if fallback_channel:
+                    await send_luxury_listing_embed(fallback_channel, listing_data)
+            
             await asyncio.sleep(2)
         
         last_luxury_batch_time = current_time
@@ -368,7 +423,7 @@ async def on_reaction_add(reaction, user):
     if reaction.emoji not in ['👍', '👎', '💎']:
         return
     
-    if reaction.message.channel.name != LUXURY_CHANNEL_NAME:
+    if reaction.message.channel.name not in [LUXURY_CHANNEL_NAME, BIN_CHANNEL_NAME]:
         return
     
     try:
@@ -497,6 +552,12 @@ async def luxury_stats(ctx):
             inline=True
         )
         
+        embed.add_field(
+            name="📺 Channels",
+            value=f"🔨 {LUXURY_CHANNEL_NAME} - Auctions\n🛒 {BIN_CHANNEL_NAME} - Buy It Now",
+            inline=False
+        )
+        
         await ctx.send(embed=embed)
         
     except Exception as e:
@@ -512,7 +573,11 @@ def run_luxury_flask_app():
             "service": "luxury_discord_bot",
             "timestamp": datetime.now().isoformat(),
             "bot_ready": bot.is_ready(),
-            "batch_size": len(luxury_batch_buffer)
+            "batch_size": len(luxury_batch_buffer),
+            "channels": {
+                "auction": LUXURY_CHANNEL_NAME,
+                "buy_it_now": BIN_CHANNEL_NAME
+            }
         })
     
     @app.route('/webhook/luxury_listing', methods=['POST'])
@@ -537,6 +602,35 @@ def run_luxury_flask_app():
                 
         except Exception as e:
             logger.error(f"❌ Luxury webhook error: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    @app.route('/webhook/listing', methods=['POST'])
+    def webhook_listing():
+        try:
+            if not request.is_json:
+                return jsonify({"error": "Content-Type must be application/json"}), 400
+            
+            listing_data = request.get_json()
+            
+            if not listing_data or 'auction_id' not in listing_data:
+                return jsonify({"error": "Invalid listing data"}), 400
+            
+            # Check if this is a luxury listing
+            if listing_data.get('is_luxury') or listing_data.get('source') == 'luxury_sniper':
+                if bot.is_ready():
+                    asyncio.run_coroutine_threadsafe(
+                        send_single_luxury_listing(listing_data), 
+                        bot.loop
+                    )
+                    return jsonify({"status": "success", "message": "Luxury listing received"}), 200
+                else:
+                    return jsonify({"error": "Bot not ready"}), 503
+            else:
+                # Handle regular listings (if needed)
+                return jsonify({"status": "success", "message": "Regular listing received"}), 200
+                
+        except Exception as e:
+            logger.error(f"❌ Listing webhook error: {e}")
             return jsonify({"error": str(e)}), 500
     
     @app.route('/webhook/health')
