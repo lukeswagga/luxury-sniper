@@ -361,9 +361,8 @@ async def send_profit_listing_embed(channel, listing_data):
         
         message = await channel.send(embed=embed)
         
-        # Add relevant reactions for user interaction
-        await message.add_reaction("💰")  # Mark as profitable
-        await message.add_reaction("🔖")  # Bookmark
+        # No auto-reactions - let users react naturally
+        pass
         
         # Store message info for database
         listing_data['message_id'] = message.id
