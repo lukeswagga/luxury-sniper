@@ -236,54 +236,37 @@ def get_brand_color(brand):
     return colors.get(brand, 0x9932CC)
 
 async def send_profit_listing_embed(channel, listing_data):
-    """Send enhanced profit-focused listing embed with error handling"""
+    """Send clean listing embed without profit calculation display"""
     try:
-        # Debug: Print the data structure
-        logger.info(f"📊 Listing data keys: {list(listing_data.keys())}")
-        
         brand = listing_data.get('brand', 'Unknown')
         brand_emoji = LUXURY_BRAND_EMOJIS.get(brand, "💎")
         listing_type = listing_data.get('listing_type', 'unknown')
         
-        # Get profit analysis with fallbacks
+        # Get ROI for internal routing but don't display it
         profit_analysis = listing_data.get('profit_analysis', {})
         roi_percent = profit_analysis.get('roi_percent', 0)
-        estimated_profit = profit_analysis.get('estimated_profit', 0)
-        purchase_price = profit_analysis.get('purchase_price', listing_data.get('price_usd', 0))
-        estimated_sell_price = profit_analysis.get('estimated_sell_price', 0)
         
-        # Ensure we have valid numeric values
-        try:
-            roi_percent = float(roi_percent) if roi_percent else 0
-            estimated_profit = float(estimated_profit) if estimated_profit else 0
-            purchase_price = float(purchase_price) if purchase_price else 0
-            estimated_sell_price = float(estimated_sell_price) if estimated_sell_price else 0
-        except (ValueError, TypeError):
-            logger.warning(f"⚠️ Invalid numeric values in profit analysis, using defaults")
-            roi_percent = 0
-            estimated_profit = 0
-            purchase_price = listing_data.get('price_usd', 0)
-            estimated_sell_price = 0
-        
-        # Determine profit tier
-        profit_tier = get_profit_tier(roi_percent)
-        profit_emoji = PROFIT_TIER_EMOJIS.get(profit_tier, "📈")
-        
-        # Create title based on listing type and profit
-        if listing_type == 'buy_it_now':
-            title_prefix = f"🛒 {profit_emoji} INSTANT PROFIT"
-        elif listing_type == 'auction':
-            title_prefix = f"🔨 {profit_emoji} AUCTION PROFIT"
+        # Determine profit tier for emoji only
+        if roi_percent >= 400:
+            profit_emoji = "🚀"
+        elif roi_percent >= 300:
+            profit_emoji = "💎"
+        elif roi_percent >= 200:
+            profit_emoji = "✨"
         else:
-            title_prefix = f"💎 {profit_emoji} PROFIT FIND"
+            profit_emoji = "📈"
         
-        # Get title with fallback
-        title = listing_data.get('title', 'No title available')
-        title_display = title[:150] + ('...' if len(title) > 150 else '')
+        # Clean title without profit info
+        if listing_type == 'buy_it_now':
+            title_prefix = f"🛒 {brand_emoji} {brand}"
+        elif listing_type == 'auction':
+            title_prefix = f"🔨 {brand_emoji} {brand}"
+        else:
+            title_prefix = f"💎 {brand_emoji} {brand}"
         
         embed = discord.Embed(
-            title=f"{title_prefix} - {brand_emoji} {brand}",
-            description=f"**{title_display}**",
+            title=f"{title_prefix} - ${listing_data.get('price_usd', 0):.2f}",
+            description=f"**{listing_data.get('title', 'No title')[:200]}{'...' if len(listing_data.get('title', '')) > 200 else ''}**",
             color=get_brand_color(brand),
             timestamp=datetime.now(timezone.utc)
         )
@@ -291,46 +274,28 @@ async def send_profit_listing_embed(channel, listing_data):
         if listing_data.get('image_url'):
             embed.set_thumbnail(url=listing_data['image_url'])
         
-        # Profit calculation field (most important)
-        try:
-            profit_value = f"**Buy:** ${purchase_price:.2f}\n**Sell:** ${estimated_sell_price:.2f}\n**Profit:** ${estimated_profit:.2f}\n**ROI:** {roi_percent:.0f}%"
-        except (ValueError, TypeError):
-            profit_value = f"**Buy:** ${purchase_price:.2f}\n**Sell:** ${estimated_sell_price}\n**Profit:** ${estimated_profit:.2f}\n**ROI:** {roi_percent:.0f}%"
-        
+        # Simple price field only
+        price_jpy = listing_data.get('price_jpy', 0)
+        price_usd = listing_data.get('price_usd', 0)
         embed.add_field(
-            name="💰 PROFIT CALCULATION",
-            value=profit_value,
+            name="💴 Price",
+            value=f"¥{price_jpy:,} (~${price_usd:.2f})",
             inline=True
         )
         
-        # Price details with validation
-        try:
-            price_jpy = float(listing_data.get('price_jpy', 0)) if listing_data.get('price_jpy') else 0
-            price_usd = float(listing_data.get('price_usd', 0)) if listing_data.get('price_usd') else 0
-        except (ValueError, TypeError):
-            logger.warning(f"⚠️ Invalid price values, using defaults")
-            price_jpy = 0
-            price_usd = 0
-        
-        embed.add_field(
-            name="💴 Yahoo Price",
-            value=f"¥{price_jpy:,.0f}\n(${price_usd:.2f})",
-            inline=True
-        )
-        
-        # ROI indicator
+        # Simple quality indicator without specific ROI
         if roi_percent >= 400:
-            roi_indicator = "🚀 ULTRA PROFIT"
+            quality_text = "🚀 Ultra Deal"
         elif roi_percent >= 300:
-            roi_indicator = "💎 HIGH PROFIT"
+            quality_text = "💎 Great Deal"
         elif roi_percent >= 200:
-            roi_indicator = "✨ GOOD PROFIT"
+            quality_text = "✨ Good Deal"
         else:
-            roi_indicator = "📈 FAIR PROFIT"
+            quality_text = "📈 Fair Deal"
         
         embed.add_field(
-            name="📊 Opportunity Level",
-            value=roi_indicator,
+            name="📊 Deal Quality",
+            value=quality_text,
             inline=True
         )
         
@@ -341,47 +306,45 @@ async def send_profit_listing_embed(channel, listing_data):
         
         # Quick purchase links
         embed.add_field(
-            name="🔗 QUICK PURCHASE",
-            value=f"[ZenMarket BUY NOW]({zenmarket_url})\n[Yahoo Direct]({yahoo_url})",
+            name="🔗 Quick Purchase",
+            value=f"[ZenMarket]({zenmarket_url}) | [Yahoo Direct]({yahoo_url})",
             inline=False
         )
         
-        # Footer with listing type and timing
+        # Clean footer without profit info
         if listing_type == 'buy_it_now':
-            footer_text = f"🛒 Buy It Now - Instant Purchase Available!"
+            footer_text = f"🛒 Buy It Now - Instant Purchase Available"
         elif listing_type == 'auction':
-            footer_text = f"🔨 Auction - Place Your Bid Now!"
+            footer_text = f"🔨 Auction - Place Your Bid"
         else:
-            footer_text = f"💎 Profit opportunity detected!"
+            footer_text = f"💎 Luxury find under $60"
         
         embed.set_footer(
-            text=f"{footer_text} • Target ROI: 200%+",
-            icon_url="https://images.emojiterra.com/google/noto-emoji/unicode-15/color/512px/1f4b0.png"
+            text=f"{footer_text} • Luxury steals under $60",
+            icon_url="https://images.emojiterra.com/google/noto-emoji/unicode-15/color/512px/1f48e.png"
         )
         
         message = await channel.send(embed=embed)
         
-        # No auto-reactions - let users react naturally
-        pass
+        # No auto-reactions
         
         # Store message info for database
         listing_data['message_id'] = message.id
         listing_data['channel_id'] = channel.id
         
-        # Save to database
+        # Save to database with error handling
         try:
             success = add_listing(listing_data, message.id)
             if success:
-                logger.info(f"✅ Saved to database: {brand} - ROI {roi_percent:.0f}%")
+                logger.info(f"✅ Saved to database: {brand} - ${price_usd:.2f}")
         except Exception as db_error:
-            logger.warning(f"⚠️ Database error: {db_error}")
+            logger.warning(f"⚠️ Database error (non-critical): {db_error}")
         
-        logger.info(f"✅ Sent profit listing: {brand} - ${purchase_price:.2f} → ${estimated_sell_price} ({roi_percent:.0f}% ROI)")
+        logger.info(f"✅ Sent clean listing: {brand} - ${price_usd:.2f}")
         return message
         
     except Exception as e:
-        logger.error(f"❌ Error sending profit listing embed: {e}")
-        logger.error(f"❌ Listing data: {listing_data}")
+        logger.error(f"❌ Error sending clean listing: {e}")
         return None
 
 async def route_listing_to_correct_channel(listing_data):
