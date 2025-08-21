@@ -63,7 +63,8 @@ LUXURY_BRAND_EMOJIS = {
     "Rick Owens": "🖤",
     "Comme Des Garcons": "❤️",
     "Junya Watanabe": "💙",
-    "Issey Miyake": "🌀"
+    "Issey Miyake": "🌀",
+    "Thom Browne": "🎩"  # NEW
 }
 
 PROFIT_TIER_EMOJIS = {
@@ -231,7 +232,8 @@ def get_brand_color(brand):
         "Rick Owens": 0x2C2C2C,
         "Comme Des Garcons": 0xFF69B4,
         "Junya Watanabe": 0x4169E1,
-        "Issey Miyake": 0x800080
+        "Issey Miyake": 0x800080,
+        "Thom Browne": 0x000080  # NEW - Navy blue
     }
     return colors.get(brand, 0x9932CC)
 
