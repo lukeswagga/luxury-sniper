@@ -312,51 +312,119 @@ def has_banned_keywords(title):
             return True, banned
     return False, None
 
-def check_if_buy_it_now(auction_id):
-    """Check ZenMarket page to see if item has 'Buyout price' (Buy It Now)"""
+def check_listing_type_enhanced(auction_id):
+    """Enhanced Buy It Now detection with multiple methods and better accuracy"""
     try:
-        zenmarket_url = f"https://zenmarket.jp/en/auction.aspx?itemCode={auction_id}"
         headers = {'User-Agent': random.choice(USER_AGENTS)}
         
-        response = requests.get(zenmarket_url, headers=headers, timeout=10)
+        # Method 1: Direct Yahoo Auctions page check (most reliable)
+        yahoo_url = f"https://page.auctions.yahoo.co.jp/jp/auction/{auction_id}"
         
-        if response.status_code == 200:
-            content = response.text.lower()
+        try:
+            yahoo_response = requests.get(yahoo_url, headers=headers, timeout=12)
             
-            # Check for Buy It Now indicators
-            bin_indicators = [
-                'buyout price',
-                'buy now price',
-                'fixed price',
-                'immediate purchase'
-            ]
-            
-            # Check for Auction indicators  
-            auction_indicators = [
-                'current bid',
-                'highest bid',
-                'bidding',
-                'auction ends',
-                'time left'
-            ]
-            
-            has_bin = any(indicator in content for indicator in bin_indicators)
-            has_auction = any(indicator in content for indicator in auction_indicators)
-            
-            if has_bin and not has_auction:
-                return 'buy_it_now'
-            elif has_auction and not has_bin:
-                return 'auction'
-            elif has_bin and has_auction:
-                return 'both'  # Has both BIN and auction
-            else:
-                return 'unknown'
+            if yahoo_response.status_code == 200:
+                yahoo_content = yahoo_response.text
+                
+                # Strong BIN indicators on Yahoo
+                strong_bin_indicators = [
+                    'フリマ',  # Flea market (always BIN)
+                    'fixedprice',  # Fixed price parameter
+                    'immediate_price',  # Immediate price
+                    'buynow_price',  # Buy now price
+                    '即決価格',  # Immediate decision price
+                    '定額',  # Fixed amount
+                ]
+                
+                # Strong auction indicators
+                strong_auction_indicators = [
+                    '入札件数',  # Number of bids
+                    '現在価格',  # Current price (in auctions)
+                    '残り時間',  # Time remaining
+                    'bidding',
+                    '入札する',  # Place bid button
+                    'オークション終了',  # Auction end
+                ]
+                
+                bin_count = sum(1 for indicator in strong_bin_indicators if indicator in yahoo_content)
+                auction_count = sum(1 for indicator in strong_auction_indicators if indicator in yahoo_content)
+                
+                logger.debug(f"Yahoo check for {auction_id}: BIN signals={bin_count}, Auction signals={auction_count}")
+                
+                if bin_count > 0 and auction_count == 0:
+                    return 'buy_it_now'
+                elif auction_count > 0 and bin_count == 0:
+                    return 'auction'
+                elif bin_count > auction_count:
+                    return 'buy_it_now'
+                elif auction_count > bin_count:
+                    return 'auction'
+                
+        except Exception as yahoo_error:
+            logger.debug(f"Yahoo check failed for {auction_id}: {yahoo_error}")
         
-        return 'unknown'
+        # Method 2: ZenMarket page check (backup)
+        time.sleep(0.5)  # Rate limiting
+        
+        zenmarket_url = f"https://zenmarket.jp/en/auction.aspx?itemCode={auction_id}"
+        
+        try:
+            zenmarket_response = requests.get(zenmarket_url, headers=headers, timeout=12)
+            
+            if zenmarket_response.status_code == 200:
+                zen_content = zenmarket_response.text.lower()
+                
+                # ZenMarket BIN indicators
+                zen_bin_indicators = [
+                    'buyout price',
+                    'buy now price', 
+                    'fixed price',
+                    'immediate purchase',
+                    'instant buy',
+                    'direct purchase',
+                    'fixed amount'
+                ]
+                
+                # ZenMarket auction indicators
+                zen_auction_indicators = [
+                    'current bid',
+                    'highest bid',
+                    'bidding ends',
+                    'auction ends',
+                    'time left',
+                    'place bid',
+                    'bid now',
+                    'minimum bid'
+                ]
+                
+                zen_bin_count = sum(1 for indicator in zen_bin_indicators if indicator in zen_content)
+                zen_auction_count = sum(1 for indicator in zen_auction_indicators if indicator in zen_content)
+                
+                logger.debug(f"ZenMarket check for {auction_id}: BIN signals={zen_bin_count}, Auction signals={zen_auction_count}")
+                
+                if zen_bin_count > 0 and zen_auction_count == 0:
+                    return 'buy_it_now'
+                elif zen_auction_count > 0 and zen_bin_count == 0:
+                    return 'auction'
+                elif zen_bin_count > zen_auction_count:
+                    return 'buy_it_now'
+                elif zen_auction_count > zen_bin_count:
+                    return 'auction'
+                
+        except Exception as zen_error:
+            logger.debug(f"ZenMarket check failed for {auction_id}: {zen_error}")
+        
+        # Method 3: URL pattern analysis (last resort)
+        if 'fixedprice' in auction_id.lower() or 'buynow' in auction_id.lower():
+            return 'buy_it_now'
+        
+        # Default to auction if uncertain (conservative approach)
+        logger.debug(f"Could not determine listing type for {auction_id}, defaulting to auction")
+        return 'auction'
         
     except Exception as e:
-        logger.warning(f"Error checking ZenMarket for {auction_id}: {e}")
-        return 'unknown'
+        logger.warning(f"Error checking listing type for {auction_id}: {e}")
+        return 'auction'  # Conservative default
 
 def scrape_yahoo_luxury_all(keyword, max_pages=3):
     """Scrape all listings and categorize them by checking ZenMarket - IMPROVED"""
@@ -441,8 +509,8 @@ def scrape_yahoo_luxury_all(keyword, max_pages=3):
                             else:
                                 image_url = 'https://auctions.yahoo.co.jp' + image_url
                     
-                    # Check ZenMarket for listing type (only for quality items)
-                    listing_type = check_if_buy_it_now(auction_id)
+                    # Check for listing type (only for quality items)
+                    listing_type = check_listing_type_enhanced(auction_id)
                     
                     items.append({
                         'auction_id': auction_id,

@@ -285,5 +285,69 @@
       "min_usd": 0,
       "max_usd": 60
     }
+  },
+  "Thom Browne": {
+    "variants": [
+      "Thom Browne",
+      "トムブラウン",
+      "THOM BROWNE",
+      "Thom",
+      "Browne"
+    ],
+    "subcategories": [
+      "shirt",
+      "tee",
+      "t-shirt",
+      "polo",
+      "blouse",
+      "top",
+      "hoodie",
+      "sweatshirt",
+      "sweater",
+      "cardigan",
+      "jacket",
+      "blazer",
+      "coat",
+      "vest",
+      "pants",
+      "jeans",
+      "trousers",
+      "shorts",
+      "skirt",
+      "dress",
+      "suit",
+      "tie",
+      "cap",
+      "hat",
+      "scarf",
+      "socks",
+      "underwear",
+      "シャツ",
+      "Tシャツ",
+      "ポロ",
+      "ブラウス",
+      "トップス",
+      "パーカー",
+      "ニット",
+      "セーター",
+      "ジャケット",
+      "ブレザー",
+      "ベスト",
+      "パンツ",
+      "スーツ",
+      "ネクタイ",
+      "キャップ"
+    ],
+    "excluded_keywords": [
+      "bag", "purse", "wallet", "handbag", "clutch", "tote",
+      "shoes", "sneakers", "boots", "sandals", "heels",
+      "watch", "jewelry", "perfume", "fragrance", "cologne",
+      "eyewear", "sunglasses", "glasses",
+      "バッグ", "財布", "靴", "時計", "香水", "サングラス", "メガネ"
+    ],
+    "price_range": {
+      "min_usd": 0,
+      "max_usd": 60
+    }
   }
 }
