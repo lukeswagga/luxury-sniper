@@ -686,8 +686,8 @@ def run_profit_flask_app():
         })
     
     @app.route('/webhook/listing', methods=['POST'])
-    def webhook_profit_listing():
-        """Handle incoming profit listings"""
+    def webhook_listing():
+        """Handle incoming luxury listings (both profit and regular)"""
         try:
             if not request.is_json:
                 return jsonify({"error": "Content-Type must be application/json"}), 400
@@ -697,28 +697,55 @@ def run_profit_flask_app():
             if not listing_data or 'auction_id' not in listing_data:
                 return jsonify({"error": "Invalid listing data"}), 400
             
-            # Validate profit data
-            if not listing_data.get('profit_analysis'):
-                return jsonify({"error": "Missing profit analysis"}), 400
-            
             if not bot.is_ready():
                 return jsonify({"error": "Bot not ready"}), 503
             
-            # Process the profit listing
-            asyncio.run_coroutine_threadsafe(
-                process_single_profit_listing(listing_data), 
-                bot.loop
-            )
-            
-            return jsonify({
-                "status": "success", 
-                "message": "Profit listing received",
-                "auction_id": listing_data['auction_id'],
-                "roi": listing_data['profit_analysis'].get('roi_percent', 0)
-            }), 200
+            # Check if this is a profit listing or regular luxury listing
+            if listing_data.get('profit_analysis'):
+                # This is a profit listing
+                asyncio.run_coroutine_threadsafe(
+                    process_single_profit_listing(listing_data), 
+                    bot.loop
+                )
+                
+                return jsonify({
+                    "status": "success", 
+                    "message": "Profit listing received",
+                    "auction_id": listing_data['auction_id'],
+                    "roi": listing_data['profit_analysis'].get('roi_percent', 0)
+                }), 200
+            else:
+                # This is a regular luxury listing - add basic profit analysis
+                if 'price_usd' in listing_data:
+                    # Create a basic profit analysis for regular luxury listings
+                    price_usd = listing_data['price_usd']
+                    estimated_market_value = price_usd * 2.5  # Rough estimate
+                    estimated_profit = estimated_market_value - price_usd
+                    roi_percent = (estimated_profit / price_usd) * 100 if price_usd > 0 else 0
+                    
+                    listing_data['profit_analysis'] = {
+                        'purchase_price': price_usd,
+                        'estimated_sell_price': estimated_market_value,
+                        'estimated_profit': estimated_profit,
+                        'roi_percent': roi_percent,
+                        'is_profitable': roi_percent > 100
+                    }
+                
+                # Process as a luxury listing
+                asyncio.run_coroutine_threadsafe(
+                    process_single_profit_listing(listing_data), 
+                    bot.loop
+                )
+                
+                return jsonify({
+                    "status": "success", 
+                    "message": "Luxury listing received",
+                    "auction_id": listing_data['auction_id'],
+                    "brand": listing_data.get('brand', 'Unknown')
+                }), 200
                 
         except Exception as e:
-            logger.error(f"❌ Profit webhook error: {e}")
+            logger.error(f"❌ Webhook error: {e}")
             return jsonify({"error": str(e)}), 500
     
     @app.route('/webhook/test', methods=['POST'])
