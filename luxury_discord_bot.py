@@ -64,7 +64,8 @@ LUXURY_BRAND_EMOJIS = {
     "Comme Des Garcons": "❤️",
     "Junya Watanabe": "💙",
     "Issey Miyake": "🌀",
-    "Thom Browne": "🎩"  # NEW
+    "Thom Browne": "🎩",
+    "Yohji Yamamoto": "⚫"  # NEW - Black circle for Yohji's signature black aesthetic
 }
 
 PROFIT_TIER_EMOJIS = {
@@ -233,7 +234,8 @@ def get_brand_color(brand):
         "Comme Des Garcons": 0xFF69B4,
         "Junya Watanabe": 0x4169E1,
         "Issey Miyake": 0x800080,
-        "Thom Browne": 0x000080  # NEW - Navy blue
+        "Thom Browne": 0x000080,  # Navy blue
+        "Yohji Yamamoto": 0x0D0D0D  # Nearly black for Yohji's aesthetic
     }
     return colors.get(brand, 0x9932CC)
 
@@ -561,7 +563,7 @@ async def profit_stats(ctx):
         
         embed.add_field(
             name="🎯 Target Brands",
-            value="Balenciaga, Vetements, Rick Owens\nComme Des Garcons, Junya Watanabe, Issey Miyake",
+            value="Balenciaga, Vetements, Rick Owens, Comme Des Garcons\nJunya Watanabe, Issey Miyake, Thom Browne, Yohji Yamamoto",
             inline=False
         )
         
@@ -619,7 +621,7 @@ async def profit_setup(ctx):
     
     embed.add_field(
         name="💎 Target Brands",
-        value="Balenciaga, Vetements, Rick Owens, Comme Des Garcons, Junya Watanabe, Issey Miyake",
+        value="Balenciaga, Vetements, Rick Owens, Comme Des Garcons, Junya Watanabe, Issey Miyake, Thom Browne, Yohji Yamamoto",
         inline=False
     )
     
@@ -757,7 +759,7 @@ def run_profit_flask_app():
             "service": "luxury_profit_discord_bot",
             "bot_ready": bot.is_ready(),
             "batch_pending": len(profit_batch_buffer),
-            "target_brands": ["Balenciaga", "Vetements", "Rick Owens", "Comme Des Garcons", "Junya Watanabe", "Issey Miyake"],
+            "target_brands": ["Balenciaga", "Vetements", "Rick Owens", "Comme Des Garcons", "Junya Watanabe", "Issey Miyake", "Thom Browne", "Yohji Yamamoto"],
             "minimum_roi": "200%",
             "price_range": "$0-60 USD",
             "channels": {

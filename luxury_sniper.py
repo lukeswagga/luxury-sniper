@@ -228,7 +228,9 @@ def calculate_luxury_deal_quality(price_usd, brand, title, brand_data):
         "Rick Owens": 1.8,
         "Comme Des Garcons": 1.3,
         "Junya Watanabe": 1.4,
-        "Issey Miyake": 1.3
+        "Issey Miyake": 1.3,
+        "Thom Browne": 1.5,
+        "Yohji Yamamoto": 1.6
     }
     
     title_lower = title.lower()

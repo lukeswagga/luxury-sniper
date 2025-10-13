@@ -17,7 +17,28 @@ class DatabaseManager:
         else:
             print("🐘 Using PostgreSQL database")
         
-        self.init_database()
+        self.init_database_with_retry()
+    
+    def init_database_with_retry(self, max_retries=3, retry_delay=5):
+        """Initialize database with retry logic for Railway deployments"""
+        import time
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"🔄 Database initialization attempt {attempt}/{max_retries}")
+                self.init_database()
+                print(f"✅ Database initialized successfully on attempt {attempt}")
+                return
+            except Exception as e:
+                print(f"⚠️ Database connection attempt {attempt} failed: {e}")
+                if attempt < max_retries:
+                    print(f"⏳ Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    print(f"❌ All {max_retries} database connection attempts failed")
+                    print(f"❌ Final error: {e}")
+                    # Don't raise exception, allow app to start but log the error
+                    print("⚠️ Starting app without database connection - will retry on first use")
     
     @contextmanager
     def get_connection(self):
@@ -25,7 +46,8 @@ class DatabaseManager:
         if self.use_postgres:
             conn = psycopg2.connect(
                 self.database_url,
-                cursor_factory=RealDictCursor
+                cursor_factory=RealDictCursor,
+                connect_timeout=10  # Add 10 second connection timeout
             )
             try:
                 yield conn
