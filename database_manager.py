@@ -2,6 +2,7 @@ import os
 import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2 import pool
 from contextlib import contextmanager
 import json
 from datetime import datetime
@@ -10,13 +11,28 @@ class DatabaseManager:
     def __init__(self):
         self.database_url = os.environ.get('DATABASE_URL')
         self.use_postgres = bool(self.database_url)
+        self.connection_pool = None
+        self.db_initialized = False
         
         if not self.use_postgres:
             self.db_path = 'auction_tracking.db'
             print("🗄️ Using SQLite database: auction_tracking.db")
         else:
             print("🐘 Using PostgreSQL database")
+            # Try to create connection pool
+            try:
+                self.connection_pool = psycopg2.pool.SimpleConnectionPool(
+                    minconn=1,
+                    maxconn=10,
+                    dsn=self.database_url,
+                    connect_timeout=10
+                )
+                print("✅ PostgreSQL connection pool created")
+            except Exception as e:
+                print(f"⚠️ Could not create connection pool: {e}")
+                print("⚠️ Will use direct connections instead")
         
+        # Try to initialize database, but don't fail if it doesn't work
         self.init_database_with_retry()
     
     def init_database_with_retry(self, max_retries=3, retry_delay=5):
@@ -27,6 +43,7 @@ class DatabaseManager:
             try:
                 print(f"🔄 Database initialization attempt {attempt}/{max_retries}")
                 self.init_database()
+                self.db_initialized = True
                 print(f"✅ Database initialized successfully on attempt {attempt}")
                 return
             except Exception as e:
@@ -39,20 +56,54 @@ class DatabaseManager:
                     print(f"❌ Final error: {e}")
                     # Don't raise exception, allow app to start but log the error
                     print("⚠️ Starting app without database connection - will retry on first use")
+                    print("💡 TIP: Check Railway PostgreSQL service status at https://railway.app")
     
     @contextmanager
     def get_connection(self):
-        """Get database connection (PostgreSQL or SQLite)"""
+        """Get database connection (PostgreSQL or SQLite) with connection pooling"""
         if self.use_postgres:
-            conn = psycopg2.connect(
-                self.database_url,
-                cursor_factory=RealDictCursor,
-                connect_timeout=10  # Add 10 second connection timeout
-            )
+            conn = None
+            from_pool = False
+            
+            # Try to get connection from pool first
+            if self.connection_pool:
+                try:
+                    conn = self.connection_pool.getconn()
+                    from_pool = True
+                except Exception as e:
+                    print(f"⚠️ Could not get connection from pool: {e}")
+            
+            # Fall back to direct connection if pool unavailable
+            if not conn:
+                try:
+                    conn = psycopg2.connect(
+                        self.database_url,
+                        cursor_factory=RealDictCursor,
+                        connect_timeout=10
+                    )
+                except Exception as e:
+                    print(f"❌ Direct PostgreSQL connection failed: {e}")
+                    raise
+            
             try:
+                # Add RealDictCursor if not already set
+                if from_pool and conn.cursor_factory != RealDictCursor:
+                    conn = psycopg2.connect(
+                        self.database_url,
+                        cursor_factory=RealDictCursor,
+                        connect_timeout=10
+                    )
+                    from_pool = False
+                
                 yield conn
             finally:
-                conn.close()
+                if from_pool and self.connection_pool:
+                    try:
+                        self.connection_pool.putconn(conn)
+                    except Exception:
+                        conn.close()
+                else:
+                    conn.close()
         else:
             conn = sqlite3.connect(self.db_path)
             # Don't use Row factory for SQLite to maintain tuple compatibility
