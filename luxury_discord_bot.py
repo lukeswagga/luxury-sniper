@@ -16,6 +16,7 @@ from database_manager import (
     get_user_proxy_preference, set_user_proxy_preference,
     init_subscription_tables
 )
+from queue_manager import queue_manager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -87,6 +88,12 @@ PROFIT_BATCH_SIZE = 3
 PROFIT_BATCH_TIMEOUT = 30
 last_profit_batch_time = None
 
+# Queue processing settings
+QUEUE_PROCESSING_ENABLED = True
+QUEUE_PROCESS_INTERVAL = 10  # Process queue every 10 seconds
+QUEUE_ITEMS_PER_BATCH = 1  # Process 1 item at a time to avoid rate limits
+queue_processing_task = None
+
 @bot.event
 async def on_ready():
     logger.info(f'💰 Luxury Profit Discord Bot ready! Logged in as {bot.user}')
@@ -112,6 +119,12 @@ async def on_ready():
         logger.info(f"✅ Grizzly channel ready: #{grizzly_channel.name}")
         
         init_subscription_tables()
+        
+        # Start queue processing task
+        if QUEUE_PROCESSING_ENABLED:
+            global queue_processing_task
+            queue_processing_task = bot.loop.create_task(process_grizzly_queue_loop())
+            logger.info("✅ Started Grizzly queue processor")
         
         await bot.change_presence(
             activity=discord.Activity(
@@ -429,6 +442,60 @@ async def route_listing_to_correct_channel(listing_data):
     except Exception as e:
         logger.error(f"❌ Error routing listing: {e}")
         return False
+
+async def process_grizzly_queue_loop():
+    """Continuously process Grizzly listings from queue at controlled rate"""
+    logger.info("🔄 Starting Grizzly queue processor...")
+    
+    while True:
+        try:
+            if not bot.is_ready():
+                await asyncio.sleep(5)
+                continue
+            
+            # Process items from queue
+            processed = 0
+            for _ in range(QUEUE_ITEMS_PER_BATCH):
+                listing_data = queue_manager.get_next_listing()
+                
+                if not listing_data:
+                    break  # Queue is empty
+                
+                # Process the listing
+                try:
+                    # Check if it's a grizzly listing
+                    is_grizzly = listing_data.get('is_grizzly', False) or listing_data.get('source') == 'grizzly_jacket_sniper'
+                    
+                    if is_grizzly:
+                        # Route to grizzly channel
+                        success = await route_listing_to_correct_channel(listing_data)
+                        if success:
+                            processed += 1
+                            logger.info(f"✅ Processed Grizzly listing from queue: {listing_data.get('auction_id')}")
+                        else:
+                            logger.warning(f"⚠️ Failed to process Grizzly listing: {listing_data.get('auction_id')}")
+                    else:
+                        # Regular listing, process normally
+                        await process_single_profit_listing(listing_data)
+                        processed += 1
+                    
+                    # Rate limiting: small delay between items
+                    await asyncio.sleep(2)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error processing queued listing: {e}")
+                    continue
+            
+            if processed > 0:
+                queue_size = queue_manager.get_queue_size()
+                logger.info(f"📊 Processed {processed} items from queue ({queue_size} remaining)")
+            
+            # Wait before next processing cycle
+            await asyncio.sleep(QUEUE_PROCESS_INTERVAL)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in queue processing loop: {e}")
+            await asyncio.sleep(QUEUE_PROCESS_INTERVAL)
 
 async def send_profit_batch_if_ready():
     """Send batch of profit listings if ready"""
@@ -753,6 +820,20 @@ def run_profit_flask_app():
                 
         except Exception as e:
             logger.error(f"❌ Webhook error: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    @app.route('/queue/stats', methods=['GET'])
+    def queue_stats():
+        """Get queue statistics"""
+        try:
+            queue_size = queue_manager.get_queue_size()
+            return jsonify({
+                "queue_size": queue_size,
+                "processing_enabled": QUEUE_PROCESSING_ENABLED,
+                "process_interval": QUEUE_PROCESS_INTERVAL
+            }), 200
+        except Exception as e:
+            logger.error(f"❌ Error getting queue stats: {e}")
             return jsonify({"error": str(e)}), 500
     
     @app.route('/webhook/test', methods=['POST'])

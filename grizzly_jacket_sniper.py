@@ -11,6 +11,7 @@ import re
 import random
 from flask import Flask, jsonify
 import logging
+from queue_manager import queue_manager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -405,7 +406,7 @@ def check_listing_type_enhanced(auction_id):
         logger.warning(f"Error checking listing type for {auction_id}: {e}")
         return 'auction'  # Conservative default
 
-def scrape_yahoo_grizzly_all(keyword, max_pages=3):
+def scrape_yahoo_grizzly_all(keyword, max_pages=10):
     """Scrape all listings and categorize them by checking ZenMarket - IMPROVED"""
     headers = {'User-Agent': random.choice(USER_AGENTS)}
     items = []
@@ -503,8 +504,8 @@ def scrape_yahoo_grizzly_all(keyword, max_pages=3):
                     
                     page_quality += 1
                     
-                    # Add small delay after checking ZenMarket
-                    time.sleep(0.3)
+                    # Add delay after checking ZenMarket (rate limiting)
+                    time.sleep(0.5)
                     
                 except Exception as e:
                     logger.error(f"   ❌ Error processing item: {e}")
@@ -517,7 +518,8 @@ def scrape_yahoo_grizzly_all(keyword, max_pages=3):
                 logger.info(f"   🔚 Page {page} has few items ({len(listings)}), stopping pagination")
                 break
             
-            time.sleep(random.uniform(3, 5))
+            # Longer delay between pages to avoid rate limits
+            time.sleep(random.uniform(5, 8))
             
         except Exception as e:
             logger.error(f"❌ Error scraping page {page} for '{keyword}': {e}")
@@ -567,46 +569,41 @@ def identify_grizzly_brand(title, brand_data):
     return "Unknown"
 
 def send_to_grizzly_discord_bot(listing_data):
+    """Add listing to queue instead of sending directly"""
     if not USE_DISCORD_BOT:
         logger.info("Discord bot integration disabled")
         return False
     
     try:
-        # Use the standard listing endpoint that exists in your Discord bot
-        webhook_url = f"{DISCORD_BOT_URL.rstrip('/')}/webhook/listing"
-        
         # Add grizzly identifier to the data
         listing_data['is_grizzly'] = True
         listing_data['source'] = 'grizzly_jacket_sniper'
         
-        # Test connection first
-        health_url = f"{DISCORD_BOT_URL.rstrip('/')}/health"
-        try:
-            health_response = requests.get(health_url, timeout=2)
-            if health_response.status_code != 200:
-                logger.warning("Discord bot health check failed, bot may not be ready")
-        except:
-            logger.warning("Cannot reach Discord bot, it may not be running yet")
-            return False
+        # Calculate priority based on deal quality
+        deal_quality = listing_data.get('deal_quality', 0.5)
+        price_usd = listing_data.get('price_usd', 0)
         
-        logger.info(f"Sending grizzly jacket listing to Discord: {listing_data['title'][:50]}...")
+        # Higher quality = higher priority
+        # Lower price = slightly higher priority (better deals)
+        priority = deal_quality
+        if price_usd > 0 and price_usd < 200:
+            priority += 0.1  # Boost for lower prices
         
-        response = requests.post(
-            webhook_url,
-            json=listing_data,
-            timeout=10
-        )
+        priority = min(1.0, priority)  # Cap at 1.0
         
-        if response.status_code == 200:
-            logger.info("✅ Successfully sent to Discord bot")
+        # Add to queue instead of sending directly
+        success = queue_manager.add_listing(listing_data, priority=priority)
+        
+        if success:
+            queue_size = queue_manager.get_queue_size()
+            logger.info(f"📥 Queued Grizzly listing: {listing_data.get('title', '')[:50]}... (priority: {priority:.2f}, queue: {queue_size})")
             return True
         else:
-            logger.error(f"❌ Discord bot returned status {response.status_code}: {response.text}")
+            logger.error("❌ Failed to add to queue")
             return False
             
     except Exception as e:
-        logger.error(f"❌ Error sending to Discord bot: {e}")
-        # Don't crash, just continue without Discord
+        logger.error(f"❌ Error queuing listing: {e}")
         return False
 
 def create_grizzly_listing_data(item, brand):
@@ -737,7 +734,8 @@ def main_grizzly_loop():
                     else:
                         logger.debug(f"❌ Filtered: {reason}")
                 
-                time.sleep(random.uniform(5, 8))
+                # Delay between keywords to avoid rate limits
+                time.sleep(random.uniform(8, 12))
                 
             except Exception as e:
                 logger.error(f"Error processing keyword '{keyword}': {e}")
