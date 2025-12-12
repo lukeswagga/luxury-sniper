@@ -1,0 +1,82 @@
+{
+  "Y's": {
+    "variants": [
+      "Y's",
+      "YS",
+      "ワイズ",
+      "Y's by Yohji Yamamoto",
+      "ys by yohji yamamoto",
+      "Yohji Yamamoto Y's"
+    ],
+    "subcategories": [
+      "jacket",
+      "ジャケット",
+      "grizzly",
+      "グリズリー"
+    ],
+    "excluded_keywords": [
+      "bag", "purse", "wallet", "handbag", "clutch", "tote",
+      "shoes", "sneakers", "boots", "sandals", "heels",
+      "watch", "jewelry", "perfume", "fragrance", "cologne",
+      "eyewear", "sunglasses", "glasses",
+      "バッグ", "財布", "靴", "時計", "香水", "サングラス", "メガネ"
+    ],
+    "price_range": {
+      "min_usd": 0,
+      "max_usd": 500
+    }
+  },
+  "The Real Mccoys": {
+    "variants": [
+      "The Real Mccoys",
+      "THE REAL MCCOYS",
+      "Real Mccoys",
+      "リアルマッコイズ",
+      "マッコイズ",
+      "Mccoys"
+    ],
+    "subcategories": [
+      "jacket",
+      "ジャケット",
+      "grizzly",
+      "グリズリー"
+    ],
+    "excluded_keywords": [
+      "bag", "purse", "wallet", "handbag", "clutch", "tote",
+      "shoes", "sneakers", "boots", "sandals", "heels",
+      "watch", "jewelry", "perfume", "fragrance", "cologne",
+      "eyewear", "sunglasses", "glasses",
+      "バッグ", "財布", "靴", "時計", "香水", "サングラス", "メガネ"
+    ],
+    "price_range": {
+      "min_usd": 0,
+      "max_usd": 500
+    }
+  },
+  "Attractions": {
+    "variants": [
+      "Attractions",
+      "ATTRACTIONS",
+      "アトラクションズ",
+      "アトラクション"
+    ],
+    "subcategories": [
+      "jacket",
+      "ジャケット",
+      "grizzly",
+      "グリズリー"
+    ],
+    "excluded_keywords": [
+      "bag", "purse", "wallet", "handbag", "clutch", "tote",
+      "shoes", "sneakers", "boots", "sandals", "heels",
+      "watch", "jewelry", "perfume", "fragrance", "cologne",
+      "eyewear", "sunglasses", "glasses",
+      "バッグ", "財布", "靴", "時計", "香水", "サングラス", "メガネ"
+    ],
+    "price_range": {
+      "min_usd": 0,
+      "max_usd": 500
+    }
+  }
+}
+

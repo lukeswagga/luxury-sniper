@@ -55,6 +55,7 @@ LUXURY_CATEGORY_NAME = "💎 LUXURY PROFIT FINDS"
 AUCTION_CHANNEL_NAME = "💎-auctions-under-60"
 BIN_CHANNEL_NAME = "💎-buyitnow-steals"
 PROFIT_ALERTS_CHANNEL_NAME = "🚀-profit-alerts"
+GRIZZLY_CHANNEL_NAME = "grizzly"
 
 # Brand styling
 LUXURY_BRAND_EMOJIS = {
@@ -103,10 +104,12 @@ async def on_ready():
         auction_channel = await ensure_auction_channel_exists(guild, category)
         bin_channel = await ensure_bin_channel_exists(guild, category)
         profit_alerts = await ensure_profit_alerts_channel_exists(guild, category)
+        grizzly_channel = await ensure_grizzly_channel_exists(guild, category)
         
         logger.info(f"✅ Auction channel ready: #{auction_channel.name}")
         logger.info(f"✅ BIN channel ready: #{bin_channel.name}")
         logger.info(f"✅ Profit alerts ready: #{profit_alerts.name}")
+        logger.info(f"✅ Grizzly channel ready: #{grizzly_channel.name}")
         
         init_subscription_tables()
         
@@ -210,6 +213,31 @@ async def ensure_profit_alerts_channel_exists(guild, category):
             logger.info(f"✅ Created profit alerts channel: #{PROFIT_ALERTS_CHANNEL_NAME}")
         except Exception as e:
             logger.error(f"❌ Error creating profit alerts channel: {e}")
+            raise
+    
+    return channel
+
+async def ensure_grizzly_channel_exists(guild, category):
+    """Ensure the grizzly channel exists for Grizzly Jacket listings"""
+    channel = discord.utils.get(guild.channels, name=GRIZZLY_CHANNEL_NAME)
+    
+    if not channel:
+        try:
+            channel = await guild.create_text_channel(
+                GRIZZLY_CHANNEL_NAME,
+                category=category,
+                topic="🐻 Grizzly Jacket finds - Y's, The Real Mccoys, and Attractions",
+                overwrites={
+                    guild.default_role: discord.PermissionOverwrite(
+                        read_messages=True,
+                        send_messages=False,
+                        add_reactions=True
+                    )
+                }
+            )
+            logger.info(f"✅ Created grizzly channel: #{GRIZZLY_CHANNEL_NAME}")
+        except Exception as e:
+            logger.error(f"❌ Error creating grizzly channel: {e}")
             raise
     
     return channel
@@ -358,6 +386,18 @@ async def route_listing_to_correct_channel(listing_data):
         if not guild:
             logger.error("Guild not found for routing")
             return False
+        
+        # Check if this is a Grizzly Jacket listing - route to #grizzly channel
+        is_grizzly = listing_data.get('is_grizzly', False) or listing_data.get('source') == 'grizzly_jacket_sniper'
+        if is_grizzly:
+            target_channel = discord.utils.get(guild.channels, name=GRIZZLY_CHANNEL_NAME)
+            if target_channel:
+                await send_profit_listing_embed(target_channel, listing_data)
+                logger.info(f"🐻 Sent Grizzly Jacket to #{GRIZZLY_CHANNEL_NAME}")
+                return True
+            else:
+                logger.error(f"Grizzly channel #{GRIZZLY_CHANNEL_NAME} not found")
+                return False
         
         listing_type = listing_data.get('listing_type', 'unknown')
         profit_analysis = listing_data.get('profit_analysis', {})
